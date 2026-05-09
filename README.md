@@ -77,9 +77,15 @@ ProjetoCub/
     │   └── scene.py             Classe Scene.
     └── input/                   Entrada do usuário.
         └── handler.py           Classe InputHandler.
+sandboxes/                       Sandboxes para desenvolvimento paralelo
+├── _harness.py                  Plumbing OpenGL compartilhada.
+├── sandbox_cube.py              Testa só o Cube.
+├── sandbox_block.py             Testa só o Block.
+├── sandbox_map.py               Testa só o Map.
+└── sandbox_scene.py             Testa a Scene completa.
 ```
 
-A separação entre `graphics/` e `entities/` é deliberada: conceitos de CG são reutilizáveis e independentes do jogo; entidades são específicas do domínio.
+A separação entre `graphics/` e `entities/` é deliberada: conceitos de CG são reutilizáveis e independentes do jogo; entidades são específicas do domínio. A pasta `sandboxes/` é separada de `src/` porque contém arquivos **executáveis de desenvolvimento**, não código de produção (ver [sandboxes/README.md](sandboxes/README.md)).
 
 ## Como rodar
 
@@ -102,6 +108,19 @@ python main.py
 ```
 
 A janela de 800×600 abrirá com fundo azul claro. Feche-a normalmente (X) para encerrar o loop.
+
+## Desenvolvimento paralelo (sandboxes)
+
+Cada integrante do grupo pode desenvolver e visualizar **sua parte isoladamente**, mesmo que as outras peças ainda não estejam prontas. Para isso existem os arquivos em [sandboxes/](sandboxes/) — um por componente, cada um abrindo sua própria janela OpenGL:
+
+```powershell
+python -m sandboxes.sandbox_cube     # só o cubo (com teclado)
+python -m sandboxes.sandbox_block    # só um bloco
+python -m sandboxes.sandbox_map      # só o mapa
+python -m sandboxes.sandbox_scene    # cena completa (sem teclado)
+```
+
+Detalhes, regras de colaboração e divisão sugerida do grupo em [sandboxes/README.md](sandboxes/README.md).
 
 ## Controles do teclado
 
