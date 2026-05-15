@@ -47,11 +47,12 @@ def run(
     *,
     on_key: KeyFn | None = None,
     on_mouse_motion: MouseFn | None = None,
+    on_scroll: MouseFn | None = None,
     on_frame: DrawFn | None = None,
     setup_camera: DrawFn | None = None,
     title: str = "Sandbox",
     clear_color: tuple[float, float, float, float] = (0.2, 0.5, 0.8, 1.0),
-    size: tuple[int, int] = (800, 600),
+    size: tuple[int, int] = (1920, 1080),
 ) -> None:
     width, height = size
 
@@ -78,6 +79,8 @@ def run(
                 on_key(event)
             if on_mouse_motion is not None and event.type == pygame.MOUSEMOTION:
                 on_mouse_motion(event)
+            if on_scroll is not None and event.type == pygame.MOUSEWHEEL:
+                on_scroll(event)
 
         glClearColor(*clear_color)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
