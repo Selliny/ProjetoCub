@@ -8,19 +8,19 @@ import pygame
 
 from src.world.scene import Scene
 
+_KEY_TO_ROLL: dict[int, tuple[int, int]] = {
+    pygame.K_LEFT:  (-1,  0),
+    pygame.K_RIGHT: ( 1,  0),
+    pygame.K_UP:    ( 0, -1),
+    pygame.K_DOWN:  ( 0,  1),
+}
+
 
 class InputHandler:
     def handle(self, event: pygame.event.Event, scene: Scene) -> None:
         if event.type != pygame.KEYDOWN:
             return
 
-        if event.key == pygame.K_LEFT:
-            pass  # TODO: scene.cube.move(-dx, 0, 0)
-        elif event.key == pygame.K_RIGHT:
-            pass  # TODO: scene.cube.move(+dx, 0, 0)
-        elif event.key == pygame.K_UP:
-            pass  # TODO: scene.cube.move(0, +dy, 0)  ou eixo Z, conforme o jogo
-        elif event.key == pygame.K_DOWN:
-            pass  # TODO: scene.cube.move(0, -dy, 0)
-        elif event.key == pygame.K_r:
-            pass  # TODO: scene.cube.rotate(d_angle)
+        direction = _KEY_TO_ROLL.get(event.key)
+        if direction is not None:
+            scene.cube.try_roll(*direction)

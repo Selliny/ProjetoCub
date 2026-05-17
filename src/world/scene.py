@@ -1,6 +1,6 @@
 """Cena: agrega o cubo jogável e o mapa, e expõe um único draw() ao loop principal."""
 
-from OpenGL.GL import GL_CULL_FACE, glDisable, glLoadIdentity, glRotatef
+from OpenGL.GL import GL_CULL_FACE, glDisable, glLoadIdentity
 
 from src.entities.cube import Cube
 from src.world.map import Map
@@ -14,12 +14,6 @@ class Scene:
     def draw(self) -> None:
         glDisable(GL_CULL_FACE)
         glLoadIdentity()
-
-        self.cube.position.apply()
-        glRotatef(self.cube.angle, 0.0, 1.0, 0.0)
-        self.cube.size.apply()
-
-        self.cube.color.apply()
+        self.cube.apply_transform()
         self.cube.draw()
-
         self.map.draw()
