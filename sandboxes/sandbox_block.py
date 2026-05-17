@@ -10,9 +10,10 @@ Controles:
   1               → cor cinza (Block padrão)
   2               → cor amarelo ouro (PoweredBlock visual)
   3               → cor vermelha
-  ↑ / ↓           → câmera avança / recua
-  ← / →           → câmera desloca lateralmente
-  Mouse btn esq   → arrastar rotaciona câmera (yaw + pitch)
+  ↑ / ↓           → aproxima / afasta a câmera
+  ← / →           → orbita a câmera ao redor do bloco
+  Q / E           → sobe / desce a câmera
+  Mouse btn esq   → arrastar orbita e ajusta altura
 
 Como rodar (raiz do projeto, venv ativado):
 
@@ -21,13 +22,23 @@ Como rodar (raiz do projeto, venv ativado):
 
 import pygame
 from OpenGL.GL import GL_QUADS, glBegin, glColor3f, glEnd, glVertex3f
+from OpenGL.GLU import gluLookAt
 
 from sandboxes._harness import run
 from src.entities.block import Block, PoweredBlock
-from src.graphics.camera import Camera
 from src.graphics.color import Color
 from src.graphics.position import Position
 from src.graphics.size import Size
+
+CAMERA_MIN_HEIGHT = 1.0
+CAMERA_MAX_HEIGHT = 10.0
+CAMERA_MIN_DISTANCE = 2.0
+CAMERA_MAX_DISTANCE = 12.0
+CAMERA_ORBIT_STEP = 2.5
+CAMERA_DISTANCE_STEP = 0.25
+CAMERA_HEIGHT_STEP = 0.18
+CAMERA_MOUSE_SENSITIVITY = 0.25
+CAMERA_FOLLOW_SMOOTHING = 8.0
 
 
 def _draw_floor() -> None:
@@ -66,13 +77,25 @@ def main() -> None:
         size=block_size,
     )
 
-    # Lista de um elemento para permitir troca por referência dentro dos closures.
     current: list[Block] = [block_common]
 
-    camera = Camera(eye_x=0.0, eye_y=3.0, eye_z=5.0, yaw=180.0, pitch=-30.0)
+    last_frame_ms: list[int | None] = [None]
+    camera_yaw: list[float] = [180.0]
+    camera_height: list[float] = [4.0]
+    camera_distance: list[float] = [6.0]
+    camera_eye = pygame.math.Vector3(0.0, 4.0, 6.0)
+    camera_target = pygame.math.Vector3(0.0, 0.0, 0.0)
+
+    def _clamp_camera() -> None:
+        camera_height[0] = max(CAMERA_MIN_HEIGHT, min(CAMERA_MAX_HEIGHT, camera_height[0]))
+        camera_distance[0] = max(CAMERA_MIN_DISTANCE, min(CAMERA_MAX_DISTANCE, camera_distance[0]))
 
     def setup_camera() -> None:
-        camera.apply()
+        gluLookAt(
+            camera_eye.x, camera_eye.y, camera_eye.z,
+            camera_target.x, camera_target.y, camera_target.z,
+            0.0, 1.0, 0.0,
+        )
 
     def draw() -> None:
         _draw_floor()
@@ -97,31 +120,54 @@ def main() -> None:
             current[0].color = Color(0.9, 0.2, 0.2)
 
         else:
-            return  # tecla não mapeada — não imprime estado
+            return
 
         _print_state(current[0])
 
     def on_frame() -> None:
+        now_ms = pygame.time.get_ticks()
+        if last_frame_ms[0] is None:
+            dt = 1.0 / 60.0
+        else:
+            dt = (now_ms - last_frame_ms[0]) / 1000.0
+        last_frame_ms[0] = now_ms
+
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP]:
-            camera.move_forward(+Camera.MOVE_STEP)
-        if keys[pygame.K_DOWN]:
-            camera.move_forward(-Camera.MOVE_STEP)
         if keys[pygame.K_LEFT]:
-            camera.strafe(+Camera.MOVE_STEP)
+            camera_yaw[0] += CAMERA_ORBIT_STEP
         if keys[pygame.K_RIGHT]:
-            camera.strafe(-Camera.MOVE_STEP)
+            camera_yaw[0] -= CAMERA_ORBIT_STEP
+        if keys[pygame.K_UP]:
+            camera_distance[0] -= CAMERA_DISTANCE_STEP
+        if keys[pygame.K_DOWN]:
+            camera_distance[0] += CAMERA_DISTANCE_STEP
+        if keys[pygame.K_q]:
+            camera_height[0] += CAMERA_HEIGHT_STEP
+        if keys[pygame.K_e]:
+            camera_height[0] -= CAMERA_HEIGHT_STEP
+        _clamp_camera()
+
+        yaw = pygame.math.Vector2(0.0, 1.0).rotate(camera_yaw[0])
+        desired_target = pygame.math.Vector3(0.0, 0.0, 0.0)
+        desired_eye = pygame.math.Vector3(
+            yaw.x * camera_distance[0],
+            camera_height[0],
+            yaw.y * camera_distance[0],
+        )
+        blend = min(1.0, CAMERA_FOLLOW_SMOOTHING * dt)
+        camera_target.update(camera_target.lerp(desired_target, blend))
+        camera_eye.update(camera_eye.lerp(desired_eye, blend))
 
     def on_mouse_motion(event: pygame.event.Event) -> None:
-        if pygame.mouse.get_pressed()[0]:
-            dx, dy = event.rel
-            camera.rotate(
-                dyaw=dx * Camera.MOUSE_SENSITIVITY,
-                dpitch=-dy * Camera.MOUSE_SENSITIVITY,
-            )
+        if not pygame.mouse.get_pressed()[0]:
+            return
+        dx, dy = event.rel
+        camera_yaw[0] -= dx * CAMERA_MOUSE_SENSITIVITY
+        camera_height[0] -= dy * CAMERA_HEIGHT_STEP
+        _clamp_camera()
 
     print("=== Sandbox Block ===")
-    print("ESPAÇO=active | P=tipo | 1/2/3=cor | setas+mouse=câmera")
+    print("ESPAÇO=active | P=tipo | 1/2/3=cor | setas+mouse=câmera orbital")
     _print_state(current[0])
 
     run(
@@ -130,7 +176,7 @@ def main() -> None:
         on_frame=on_frame,
         on_mouse_motion=on_mouse_motion,
         setup_camera=setup_camera,
-        title="Sandbox: Block — ESPAÇO=active | P=tipo | 1/2/3=cor | setas+mouse=câmera",
+        title="Sandbox: Block — ESPAÇO=active | P=tipo | 1/2/3=cor | setas+mouse=câmera orbital",
     )
 
 

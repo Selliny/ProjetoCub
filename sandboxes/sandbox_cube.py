@@ -151,7 +151,7 @@ def main() -> None:
             last_state[0] = cube.state
             last_respawn_second[0] = None
 
-        if cube.state in (CubeState.BLOCKED, CubeState.FALLING):
+        if cube.state == CubeState.FADING_OUT:
             remaining = int(cube.get_respawn_remaining() + 0.999)
             if remaining != last_respawn_second[0]:
                 print(f"[Cube] respawn em {remaining}s")

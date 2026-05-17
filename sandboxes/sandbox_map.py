@@ -7,12 +7,10 @@ O cursor de seleção navega pelo grid e as edições afetam o bloco na célula
 selecionada — sem reiniciar o programa.
 
 Controles — câmera:
-  ↑ / ↓           → dolly (avança / recua)
-  ← / →           → strafe (desloca lateralmente)
-  Mouse btn esq   → arrastar rotaciona câmera (yaw + pitch)
-  Scroll          → zoom (glScalef aplicado na cena)
-  Q / E           → rotação yaw esquerda / direita
-  R / F           → tilt (achatamento vertical)
+  ↑ / ↓           → aproxima / afasta a câmera
+  ← / →           → orbita a câmera ao redor do centro do mapa
+  Q / E           → sobe / desce a câmera
+  Mouse btn esq   → arrastar orbita e ajusta altura
 
 Controles — cursor de seleção no grid:
   W / A / S / D   → move cursor (cima / esquerda / baixo / direita)
@@ -43,29 +41,36 @@ from OpenGL.GL import (
     glColor4f,
     glEnd,
     glLineWidth,
-    glScalef,
     glVertex3f,
 )
+from OpenGL.GLU import gluLookAt
 
 from sandboxes._harness import run
 from src.entities.block import Block, PoweredBlock
-from src.graphics.camera import Camera
 from src.graphics.color import Color
 from src.graphics.position import Position
 from src.graphics.size import Size
 from src.world.map import Map
 
-# Tamanho padrão de um bloco no grid (XZ=1.0, Y=altura do Block)
 _BLOCK_XZ: float = 1.0
 _BLOCK_HEIGHT: float = 0.1
 
-# Cores nomeadas para os atalhos de teclado
 _CORES: dict[int, tuple[Color, str]] = {
     pygame.K_1: (Color(0.78, 0.59, 0.39), "caminho"),
     pygame.K_2: (Color(0.20, 0.78, 0.20), "início"),
     pygame.K_3: (Color(0.78, 0.20, 0.20), "fim"),
     pygame.K_4: (Color(1.00, 0.75, 0.00), "powered"),
 }
+
+CAMERA_MIN_HEIGHT = 4.0
+CAMERA_MAX_HEIGHT = 50.0
+CAMERA_MIN_DISTANCE = 8.0
+CAMERA_MAX_DISTANCE = 60.0
+CAMERA_ORBIT_STEP = 2.5
+CAMERA_DISTANCE_STEP = 0.5
+CAMERA_HEIGHT_STEP = 0.3
+CAMERA_MOUSE_SENSITIVITY = 0.25
+CAMERA_FOLLOW_SMOOTHING = 8.0
 
 
 def _build_default_map() -> Map:
@@ -91,7 +96,6 @@ def _draw_floor(cols: int, rows: int) -> None:
 
 
 def _draw_grid_lines(cols: int, rows: int) -> None:
-    """Desenha linhas de grade sobre o chão para referência visual do grid."""
     glLineWidth(1.0)
     glBegin(GL_LINES)
     glColor3f(0.25, 0.25, 0.25)
@@ -105,7 +109,6 @@ def _draw_grid_lines(cols: int, rows: int) -> None:
 
 
 def _draw_cursor(col: int, row: int) -> None:
-    """Destaca a célula selecionada com uma borda amarela no chão."""
     x, z = float(col), float(row)
     glLineWidth(2.5)
     glBegin(GL_LINES)
@@ -140,27 +143,39 @@ def _print_state(col: int, row: int, block: Block | None) -> None:
 
 def main() -> None:
     map_: Map = _build_default_map()
-    camera = Camera(eye_x=15.0, eye_y=28.0, eye_z=40.0, yaw=180.0, pitch=-35.0)
 
-    # Cursor — célula atualmente selecionada no grid
-    cursor: list[int] = [0, 0]   # [col, row]
+    cursor: list[int] = [0, 0]
 
     def _col() -> int: return cursor[0]
     def _row() -> int: return cursor[1]
 
-    def setup_camera() -> None:
-        # Zoom: escala uniforme ao redor da origem antes de posicionar a câmera.
-        # Tilt: achatamento adicional no eixo Y (efeito perspectiva isométrica).
-        glScalef(camera.zoom, camera.zoom * camera.tilt, camera.zoom)
-        camera.apply()
-
     def _grid_dims() -> tuple[int, int]:
-        """Retorna (cols, rows) do mapa atual derivado das chaves do _grid."""
         if not map_._grid:
             return (Map.DEFAULT_COLS, Map.DEFAULT_ROWS)
         max_col = max(c for c, _ in map_._grid) + 1
         max_row = max(r for _, r in map_._grid) + 1
         return (max_col, max_row)
+
+    last_frame_ms: list[int | None] = [None]
+    camera_yaw: list[float] = [180.0]
+    camera_height: list[float] = [20.0]
+    camera_distance: list[float] = [28.0]
+
+    cols0, rows0 = _grid_dims()
+    cx0, cz0 = cols0 / 2.0, rows0 / 2.0
+    camera_eye = pygame.math.Vector3(cx0, 20.0, cz0 + 28.0)
+    camera_target = pygame.math.Vector3(cx0, 0.0, cz0)
+
+    def _clamp_camera() -> None:
+        camera_height[0] = max(CAMERA_MIN_HEIGHT, min(CAMERA_MAX_HEIGHT, camera_height[0]))
+        camera_distance[0] = max(CAMERA_MIN_DISTANCE, min(CAMERA_MAX_DISTANCE, camera_distance[0]))
+
+    def setup_camera() -> None:
+        gluLookAt(
+            camera_eye.x, camera_eye.y, camera_eye.z,
+            camera_target.x, camera_target.y, camera_target.z,
+            0.0, 1.0, 0.0,
+        )
 
     def draw() -> None:
         cols, rows = _grid_dims()
@@ -170,40 +185,52 @@ def main() -> None:
         map_.draw()
 
     def on_frame() -> None:
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP]:
-            camera.move_forward(+Camera.MOVE_STEP)
-        if keys[pygame.K_DOWN]:
-            camera.move_forward(-Camera.MOVE_STEP)
-        if keys[pygame.K_LEFT]:
-            camera.strafe(+Camera.MOVE_STEP)
-        if keys[pygame.K_RIGHT]:
-            camera.strafe(-Camera.MOVE_STEP)
-        if keys[pygame.K_q]:
-            camera.rotate(3.0, 0.0)
-        if keys[pygame.K_e]:
-            camera.rotate(-3.0, 0.0)
-        if keys[pygame.K_r]:
-            camera.tilt = min(1.0, camera.tilt + 0.02)
-        if keys[pygame.K_f]:
-            camera.tilt = max(0.2, camera.tilt - 0.02)
+        now_ms = pygame.time.get_ticks()
+        if last_frame_ms[0] is None:
+            dt = 1.0 / 60.0
+        else:
+            dt = (now_ms - last_frame_ms[0]) / 1000.0
+        last_frame_ms[0] = now_ms
 
-    def on_scroll(event: pygame.event.Event) -> None:
-        camera.handle_scroll(event)
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT]:
+            camera_yaw[0] += CAMERA_ORBIT_STEP
+        if keys[pygame.K_RIGHT]:
+            camera_yaw[0] -= CAMERA_ORBIT_STEP
+        if keys[pygame.K_UP]:
+            camera_distance[0] -= CAMERA_DISTANCE_STEP
+        if keys[pygame.K_DOWN]:
+            camera_distance[0] += CAMERA_DISTANCE_STEP
+        if keys[pygame.K_q]:
+            camera_height[0] += CAMERA_HEIGHT_STEP
+        if keys[pygame.K_e]:
+            camera_height[0] -= CAMERA_HEIGHT_STEP
+        _clamp_camera()
+
+        cols, rows = _grid_dims()
+        yaw = pygame.math.Vector2(0.0, 1.0).rotate(camera_yaw[0])
+        desired_target = pygame.math.Vector3(cols / 2.0, 0.0, rows / 2.0)
+        desired_eye = pygame.math.Vector3(
+            desired_target.x + yaw.x * camera_distance[0],
+            camera_height[0],
+            desired_target.z + yaw.y * camera_distance[0],
+        )
+        blend = min(1.0, CAMERA_FOLLOW_SMOOTHING * dt)
+        camera_target.update(camera_target.lerp(desired_target, blend))
+        camera_eye.update(camera_eye.lerp(desired_eye, blend))
 
     def on_mouse_motion(event: pygame.event.Event) -> None:
-        if pygame.mouse.get_pressed()[0]:
-            dx, dy = event.rel
-            camera.rotate(
-                dyaw=dx * Camera.MOUSE_SENSITIVITY,
-                dpitch=-dy * Camera.MOUSE_SENSITIVITY,
-            )
+        if not pygame.mouse.get_pressed()[0]:
+            return
+        dx, dy = event.rel
+        camera_yaw[0] -= dx * CAMERA_MOUSE_SENSITIVITY
+        camera_height[0] -= dy * CAMERA_HEIGHT_STEP
+        _clamp_camera()
 
     def on_key(event: pygame.event.Event) -> None:  # noqa: C901
         col, row = _col(), _row()
         block = map_.get_block(col, row)
 
-        # --- Navegação do cursor (WASD) ---
         if event.key == pygame.K_w:
             cursor[1] = max(0, row - 1)
             _print_state(cursor[0], cursor[1], map_.get_block(cursor[0], cursor[1]))
@@ -223,8 +250,6 @@ def main() -> None:
             _print_state(cursor[0], cursor[1], map_.get_block(cursor[0], cursor[1]))
             return
 
-        # --- Edição da célula selecionada ---
-
         if event.key == pygame.K_RETURN:
             if block is None:
                 map_.add_block(_new_block(col, row), col, row)
@@ -235,7 +260,7 @@ def main() -> None:
             return
 
         if block is None:
-            return  # restante das ações requer bloco existente
+            return
 
         if event.key == pygame.K_p:
             if isinstance(block, PoweredBlock):
@@ -291,7 +316,7 @@ def main() -> None:
 
     print("=== Sandbox Map ===")
     print("WASD=cursor | ENTER=inserir/remover | P=tipo | 1-4=cor | +/-=escala")
-    print("ESPAÇO=active | G=gerar novo mapa(32×32) | setas+mouse=câmera | scroll=zoom | R/F=tilt | Q/E=rotação")
+    print("ESPAÇO=active | G=gerar novo mapa(32×32) | setas+mouse=câmera orbital | Q/E=altura")
     _print_state(_col(), _row(), map_.get_block(_col(), _row()))
 
     run(
@@ -299,9 +324,8 @@ def main() -> None:
         on_key=on_key,
         on_frame=on_frame,
         on_mouse_motion=on_mouse_motion,
-        on_scroll=on_scroll,
         setup_camera=setup_camera,
-        title="Sandbox: Map | WASD=cursor | ENTER=±bloco | G=novo mapa | setas+mouse=câmera",
+        title="Sandbox: Map | WASD=cursor | ENTER=±bloco | G=novo mapa | setas+mouse=câmera orbital",
     )
 
 
