@@ -49,7 +49,7 @@ Tipos de célula gerados
 
 import random
 
-from src.entities.block import Block
+from src.entities.block import Block, PoweredBlock
 from src.graphics.color import Color
 from src.graphics.position import Position
 
@@ -252,6 +252,7 @@ def _matrix_to_map(
     matrix: list[list[int]],
     start: tuple[int, int],
     direction: tuple[int, int],
+    rng: random.Random,
 ) -> "Map":
     """Converte uma matriz de inteiros num Map populado com Blocks."""
     m = Map()
@@ -263,9 +264,16 @@ def _matrix_to_map(
             if template is None:
                 continue
             pos   = Position(x=float(col_idx), y=0.0, z=float(row_idx))
-            # Instância nova de Color por bloco — edições isoladas entre células.
-            color = Color(template.r, template.g, template.b)
-            m.add_block(Block(position=pos, color=color), col=col_idx, row=row_idx)
+            
+            # Se for célula de caminho comum (1), tem 10% de chance de ter o poder shrink
+            if cell == 1 and rng.random() < 0.02:
+                color = Color(1.0, 0.75, 0.0) # cor amarela p/ blocos especiais
+                block = PoweredBlock(power="shrink", position=pos, color=color)
+            else:
+                color = Color(template.r, template.g, template.b)
+                block = Block(position=pos, color=color)
+                
+            m.add_block(block, col=col_idx, row=row_idx)
     return m
 
 
@@ -306,6 +314,13 @@ class Map:
             return "empty"
         return "floor"
 
+    def get_power(self, grid_x: int, grid_z: int) -> str | None:
+        """MovementValidator: retorna o nome do poder armazenado na célula, se existir."""
+        block = self._grid.get((grid_x, grid_z))
+        if block is not None and block.active and block.is_powered:
+            return getattr(block, "power", None)
+        return None
+
     def draw(self) -> None:
         # Delega para cada bloco — blocos com active=False se ignoram sozinhos.
         for block in self._grid.values():
@@ -334,4 +349,4 @@ class Map:
         rng = random.Random(seed)
         fn = _generate_matrix_forked if forked else _generate_matrix
         matrix, start, direction = fn(cols, rows, rng)
-        return _matrix_to_map(matrix, start, direction)
+        return _matrix_to_map(matrix, start, direction, rng)
