@@ -376,6 +376,17 @@ class Cube:
                 # Move instantaneamente um quarto de bloco (esquerda e para baixo/trás) para alinhar à grade 2x2 do bloco
                 self.grid_x -= 0.25
                 self.grid_z += 0.25
+            
+            # Se colidir com o poder 'grow', e ele estiver pequeno, volta a crescer e centraliza!
+            elif power == "grow" and self.step_size == 0.5:
+                self.step_size = 1.0
+                self.size.sx = 1.0
+                self.size.sy = 1.0
+                self.size.sz = 1.0
+                
+                # Centraliza a grade ao bloco inteiro mais próximo, ignorando o quadrante 2x2.
+                self.grid_x = round(self.grid_x)
+                self.grid_z = round(self.grid_z)
 
             # Salva o último bloco válido antes de reagir ao tile.
             if tile == "floor":

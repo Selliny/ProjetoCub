@@ -265,10 +265,18 @@ def _matrix_to_map(
                 continue
             pos   = Position(x=float(col_idx), y=0.0, z=float(row_idx))
             
-            # Se for célula de caminho comum (1), tem 10% de chance de ter o poder shrink
-            if cell == 1 and rng.random() < 0.02:
-                color = Color(1.0, 0.75, 0.0) # cor amarela p/ blocos especiais
-                block = PoweredBlock(power="shrink", position=pos, color=color)
+            # Se for célula de caminho comum (1), tem a chance de virar poder:
+            if cell == 1:
+                r = rng.random()
+                if r < 0.02:
+                    color = Color(0.5, 0.0, 0.8)
+                    block = PoweredBlock(power="shrink", position=pos, color=color)
+                elif r < 0.1:
+                    color = Color(0.1, 0.5, 1.0)
+                    block = PoweredBlock(power="grow", position=pos, color=color)
+                else:
+                    color = Color(template.r, template.g, template.b)
+                    block = Block(position=pos, color=color)
             else:
                 color = Color(template.r, template.g, template.b)
                 block = Block(position=pos, color=color)
