@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Protocol
 
@@ -44,6 +45,10 @@ class MovementValidator(Protocol):
     def get_tile_type(self, grid_x: int, grid_z: int) -> str:
         """Retorna o tipo da célula para reações do cubo."""
         ...
+        
+    def get_power(self, grid_x: int, grid_z: int) -> str | None:
+        """Retorna o poder do bloco na célula, se houver."""
+        ...
 
 
 class CubeState(Enum):
@@ -77,6 +82,7 @@ class Cube:
         self.size = size if size is not None else Size.uniform(1.0)
 
         self.state = CubeState.IDLE
+        self.step_size = 1.0
         self._roll_t: float = 0.0
         self._fall_t: float = 0.0
         self._fall_offset_y: float = 0.0
@@ -340,8 +346,8 @@ class Cube:
 
     def _finish_roll(self) -> None:
         """Finaliza o roll com snap no grid e reage ao tile destino."""
-        self.grid_x += self._pending_dx
-        self.grid_z += self._pending_dz
+        self.grid_x += self._pending_dx * self.step_size
+        self.grid_z += self._pending_dz * self.step_size
 
         if self._pending_dz != 0:
             self._total_angle_z += 90.0 * self._pending_dz
@@ -355,7 +361,22 @@ class Cube:
         self._sync_position_from_grid()
 
         if self._validator is not None:
-            tile = self._validator.get_tile_type(self.grid_x, self.grid_z)
+            # Consulta o mapa usando round para encontrar o centro do bloco mais próximo (0.5 a 1.5 cai no bloco 1)
+            map_x = round(self.grid_x)
+            map_z = round(self.grid_z)
+            tile = self._validator.get_tile_type(map_x, map_z)
+            power = self._validator.get_power(map_x, map_z)
+            
+            # Se colidir com bloco de poder 'shrink', o cubo encolhe!
+            if power == "shrink" and self.step_size != 0.5:
+                self.step_size = 0.5
+                self.size.sx = 0.5
+                self.size.sy = 0.5
+                self.size.sz = 0.5
+                # Move instantaneamente um quarto de bloco (esquerda e para baixo/trás) para alinhar à grade 2x2 do bloco
+                self.grid_x -= 0.25
+                self.grid_z += 0.25
+
             # Salva o último bloco válido antes de reagir ao tile.
             if tile == "floor":
                 self._last_valid_grid_x = self.grid_x
@@ -395,11 +416,11 @@ class Cube:
 
         if self._pending_dz != 0:
             pivot_x = 0.0
-            pivot_z = 0.5 * TILE_SIZE * self._pending_dz
+            pivot_z = 0.5 * TILE_SIZE * self.step_size * self._pending_dz
             angle   = 90.0 * self._roll_t * self._pending_dz
             axis    = (1.0, 0.0, 0.0)
         else:
-            pivot_x = 0.5 * TILE_SIZE * self._pending_dx
+            pivot_x = 0.5 * TILE_SIZE * self.step_size * self._pending_dx
             pivot_z = 0.0
             angle   = -90.0 * self._roll_t * self._pending_dx
             axis    = (0.0, 0.0, 1.0)
@@ -430,6 +451,9 @@ def _run_logic_smoke_tests() -> None:
             if not self.can_move_to(grid_x, grid_z):
                 return "empty"
             return "floor"
+            
+        def get_power(self, grid_x: int, grid_z: int) -> str | None:
+            return None
 
     cube = Cube()
     bounds = Bounds()
