@@ -46,7 +46,7 @@ def _make_cube(map_: Map) -> Cube:
 
 
 def main() -> None:
-    map_: list[Map] = [Map.generate()]
+    map_: list[Map] = [Map.generate(forked=True)]
     cube: list[Cube] = [_make_cube(map_[0])]
 
     last_frame_ms: list[int | None] = [None]
@@ -79,7 +79,7 @@ def main() -> None:
 
     def on_key(event: pygame.event.Event) -> None:
         if event.key == pygame.K_g:
-            map_[0] = Map.generate()
+            map_[0] = Map.generate(forked=True)
             cube[0] = _make_cube(map_[0])
             last_state[0] = None
             print(f"[Map] novo mapa gerado — início em {map_[0].start}")

@@ -75,7 +75,7 @@ CAMERA_FOLLOW_SMOOTHING = 8.0
 
 
 def _build_default_map() -> Map:
-    return Map.generate()
+    return Map.generate(forked=True)
 
 
 def _new_block(col: int, row: int) -> Block:
