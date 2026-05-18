@@ -171,35 +171,63 @@ def _generate_matrix_forked(
         for c in range(lo, hi + 1):
             grid[row][c] = value
 
-    # Tronco inicial (rows 0 e 1).
+    # Tronco inicial (rows 0 a 2).
     set_row(0, start_cross, 2)
     set_row(1, start_cross, 1)
+    set_row(2, start_cross, 1)
 
-    # Posições de bifurcação: ramo A 2 colunas à esquerda, ramo B 2 à direita.
-    cross_a = max(0, start_cross - 2)
-    cross_b = min(cols - 2, start_cross + 2)
+    # Posições de bifurcação: garantindo uma distância média entre os ramos A e B.
+    dist = max(4, cols // 4)
+    cross_a = max(0, start_cross - dist)
+    cross_b = min(cols - 2, start_cross + dist)
 
-    # Row 2: preenche lateralmente o tronco até as pontas de cada ramo.
-    fill_lateral(2, cross_a, cross_b + 1, 1)
+    # Row 3: preenche lateralmente o tronco até as pontas de cada ramo.
+    fill_lateral(3, cross_a, cross_b + 1, 1)
 
-    # Drunk-walk independente para cada ramo entre rows 3 e rows-4.
+    # Drunk-walk independente para cada ramo entre rows 4 e rows-5.
     final_a, final_b = cross_a, cross_b
-    walk_end = rows - 4
+    walk_end = rows - 5
 
     for init_cross, sign, attr in [(cross_a, -1, "a"), (cross_b, +1, "b")]:
         cross = init_cross
-        for row in range(3, walk_end + 1):
+        for row in range(4, walk_end + 1):
             set_row(row, cross, 1)
             remaining = walk_end - row
+            
+            # Nos últimos blocos, força o caminho a se aproximar do destino (end_cross)
+            # para evitar uma "parede" reta de convergência.
+            dist_to_end = abs(cross - end_cross)
+            if remaining <= dist_to_end + 1 and cross != end_cross:
+                step = 1 if end_cross > cross else -1
+                new_cross = cross + step
+                if 0 <= new_cross <= cols - 2:
+                    cross = new_cross
+                continue
+
             if remaining <= 1:
                 continue
+
             distance_ratio = abs(cross - center) / max(center, 1.0)
             deviate_chance = 0.20 + 0.35 * distance_ratio
             if rng.random() < deviate_chance:
-                # Leve preferência para cada ramo se afastar do outro.
-                preferred = sign
-                step = preferred if rng.random() < 0.55 else -preferred
+                # No terço final do mapa, a preferência muda para ir em direção ao end_cross
+                if remaining < rows // 3:
+                    preferred = 1 if end_cross > cross else -1
+                    allow_cross_center = True
+                else:
+                    preferred = sign
+                    allow_cross_center = False
+                
+                step = preferred if rng.random() < 0.85 else -preferred
                 new_cross = cross + step
+                
+                if not allow_cross_center:
+                    # Evitar que os ramos cruzem o centro do mapa cedo demais
+                    if attr == "a" and new_cross > center - 1:
+                        new_cross = cross
+                    elif attr == "b" and new_cross < center + 1:
+                        new_cross = cross
+                
                 if 0 <= new_cross <= cols - 2:
                     cross = new_cross
         if attr == "a":
@@ -207,13 +235,13 @@ def _generate_matrix_forked(
         else:
             final_b = cross
 
-    # Row rows-3: convergência — une os finais dos dois ramos em end_cross.
-    conv_row = rows - 3
-    fill_lateral(conv_row, final_a, final_b + 1, 1)
-    fill_lateral(conv_row, min(final_a, final_b), end_cross + 1, 1)
-    fill_lateral(conv_row, end_cross, max(final_a, final_b) + 1, 1)
+    # Row rows-4: convergência lateral fina (caso algum ainda não tenha chegado perfeitamente)
+    conv_row = rows - 4
+    fill_lateral(conv_row, min(final_a, end_cross), max(final_a, end_cross) + 1, 1)
+    fill_lateral(conv_row, min(final_b, end_cross), max(final_b, end_cross) + 1, 1)
 
-    # Tronco final (rows rows-2 e rows-1).
+    # Tronco final (rows rows-3 a rows-1).
+    set_row(rows - 3, end_cross, 1)
     set_row(rows - 2, end_cross, 1)
     set_row(rows - 1, end_cross, 3)
 
