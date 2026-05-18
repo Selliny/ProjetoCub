@@ -7,6 +7,7 @@ from typing import Protocol
 
 from OpenGL.GL import (
     GL_BLEND,
+    GL_LINES,
     GL_ONE_MINUS_SRC_ALPHA,
     GL_QUADS,
     GL_SRC_ALPHA,
@@ -16,6 +17,7 @@ from OpenGL.GL import (
     glDisable,
     glEnable,
     glEnd,
+    glLineWidth,
     glRotatef,
     glScalef,
     glTranslatef,
@@ -28,8 +30,9 @@ from src.graphics.size import Size
 
 
 ROLL_DURATION: float = 0.25
-FADE_DURATION: float = 0.4   # duração do fade out e do fade in
-RESPAWN_DELAY: float = 2.0   # segundos parado antes do fade out → teleporte
+FALL_DURATION: float = 0.5   # duração da animação de queda
+FALL_DISTANCE: float = 3.0   # distância de queda em unidades Y
+FADE_DURATION: float = 0.4   # duração do fade in após teleporte
 TILE_SIZE: float = 1.0
 
 
@@ -46,10 +49,10 @@ class MovementValidator(Protocol):
 class CubeState(Enum):
     """Estados da máquina de movimento do cubo."""
 
-    IDLE       = "idle"
-    ROLLING    = "rolling"
-    FADING_OUT = "fading_out"  # sumindo após sair do caminho
-    FADING_IN  = "fading_in"   # reaparecendo no último bloco válido
+    IDLE      = "idle"
+    ROLLING   = "rolling"
+    FALLING   = "falling"    # afundando após sair do caminho
+    FADING_IN = "fading_in"  # reaparecendo no último bloco válido
 
 
 class Cube:
@@ -75,8 +78,9 @@ class Cube:
 
         self.state = CubeState.IDLE
         self._roll_t: float = 0.0
+        self._fall_t: float = 0.0
+        self._fall_offset_y: float = 0.0
         self._fade_t: float = 0.0
-        self._respawn_t: float = 0.0
         self._alpha: float = 1.0         # 1.0 = opaco, 0.0 = invisível
         self._pending_dx: int = 0
         self._pending_dz: int = 0
@@ -130,24 +134,20 @@ class Cube:
                 self._finish_roll()
             return
 
-        if self.state == CubeState.FADING_OUT:
-            self._respawn_t += dt
-            # Fase 1: espera RESPAWN_DELAY antes de começar a sumir.
-            if self._respawn_t < RESPAWN_DELAY:
-                return
-            # Fase 2: fade out.
-            self._fade_t += dt / FADE_DURATION
-            self._alpha = max(0.0, 1.0 - self._fade_t)
-            if self._fade_t >= 1.0:
-                # Teleporta para o último bloco válido e inicia fade in.
+        if self.state == CubeState.FALLING:
+            self._fall_t = min(self._fall_t + dt / FALL_DURATION, 1.0)
+            self._fall_offset_y = -FALL_DISTANCE * self._fall_t
+            if self._fall_t >= 1.0:
+                # Queda completa — teleporta e inicia fade in imediatamente.
                 self.grid_x = self._last_valid_grid_x
                 self.grid_z = self._last_valid_grid_z
                 self._sync_position_from_grid()
                 self._total_angle_z = 0.0
                 self._total_angle_x = 0.0
-                self.state = CubeState.FADING_IN
+                self._fall_offset_y = 0.0
                 self._fade_t = 0.0
                 self._alpha = 0.0
+                self.state = CubeState.FADING_IN
             return
 
         if self.state == CubeState.FADING_IN:
@@ -173,15 +173,9 @@ class Cube:
         return self.grid_x + dx, self.grid_z + dz
 
     def on_tile_enter(self, tile_type: str) -> None:
-        """Reage ao tile final do roll: qualquer coisa fora de 'floor' inicia fade."""
+        """Reage ao tile final do roll: qualquer coisa fora de 'floor' inicia queda."""
         if tile_type != "floor":
-            self._start_fade_out()
-
-    def get_respawn_remaining(self) -> float:
-        """Segundos restantes para o fade out começar (apenas durante FADING_OUT)."""
-        if self.state != CubeState.FADING_OUT:
-            return 0.0
-        return max(0.0, RESPAWN_DELAY - self._respawn_t)
+            self._start_fall()
 
     def respawn(self) -> None:
         """Força retorno imediato ao spawn inicial (debug/reset manual)."""
@@ -192,8 +186,9 @@ class Cube:
         self._sync_position_from_grid()
         self.state = CubeState.IDLE
         self._roll_t = 0.0
+        self._fall_t = 0.0
+        self._fall_offset_y = 0.0
         self._fade_t = 0.0
-        self._respawn_t = 0.0
         self._alpha = 1.0
         self._pending_dx = 0
         self._pending_dz = 0
@@ -203,68 +198,91 @@ class Cube:
         self._total_angle_x = 0.0
 
     def apply_transform(self) -> None:
-        """Aplica a matriz OpenGL correta para roll, fade ou posição parada."""
+        """Aplica a matriz OpenGL correta para roll, queda, fade ou posição parada."""
         if self.state == CubeState.ROLLING:
             self._apply_roll_transform()
             return
 
         self._sync_position_from_grid()
-        glTranslatef(self.position.x, self.position.y, self.position.z)
+        y_offset = self._fall_offset_y if self.state == CubeState.FALLING else 0.0
+        glTranslatef(self.position.x, self.position.y + y_offset, self.position.z)
         self._apply_accumulated_rotation()
         self._apply_size()
 
     def draw(self) -> None:
-        """Desenha o cubo com 6 faces coloridas. Respeita _alpha para fade."""
+        """Desenha o cubo roxo com bordas pretas. Respeita _alpha para fade."""
         a = self._alpha
         if a < 1.0:
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
+        # Faces — roxo sólido em todas as 6 faces
         glBegin(GL_QUADS)
+        glColor4f(0.5, 0.0, 0.8, a)
 
-        # Frente (+Z) — vermelho
-        glColor4f(1.0, 0.0, 0.0, a)
+        # Frente (+Z)
         glVertex3f(-0.5, -0.5,  0.5)
         glVertex3f( 0.5, -0.5,  0.5)
         glVertex3f( 0.5,  0.5,  0.5)
         glVertex3f(-0.5,  0.5,  0.5)
 
-        # Trás (−Z) — verde
-        glColor4f(0.0, 1.0, 0.0, a)
+        # Trás (−Z)
         glVertex3f( 0.5, -0.5, -0.5)
         glVertex3f(-0.5, -0.5, -0.5)
         glVertex3f(-0.5,  0.5, -0.5)
         glVertex3f( 0.5,  0.5, -0.5)
 
-        # Cima (+Y) — azul
-        glColor4f(0.0, 0.0, 1.0, a)
+        # Cima (+Y)
         glVertex3f(-0.5,  0.5, -0.5)
         glVertex3f( 0.5,  0.5, -0.5)
         glVertex3f( 0.5,  0.5,  0.5)
         glVertex3f(-0.5,  0.5,  0.5)
 
-        # Baixo (−Y) — amarelo
-        glColor4f(1.0, 1.0, 0.0, a)
+        # Baixo (−Y)
         glVertex3f(-0.5, -0.5,  0.5)
         glVertex3f( 0.5, -0.5,  0.5)
         glVertex3f( 0.5, -0.5, -0.5)
         glVertex3f(-0.5, -0.5, -0.5)
 
-        # Direita (+X) — laranja
-        glColor4f(1.0, 0.5, 0.0, a)
+        # Direita (+X)
         glVertex3f( 0.5, -0.5,  0.5)
         glVertex3f( 0.5, -0.5, -0.5)
         glVertex3f( 0.5,  0.5, -0.5)
         glVertex3f( 0.5,  0.5,  0.5)
 
-        # Esquerda (−X) — roxo
-        glColor4f(0.5, 0.0, 1.0, a)
+        # Esquerda (−X)
         glVertex3f(-0.5, -0.5, -0.5)
         glVertex3f(-0.5, -0.5,  0.5)
         glVertex3f(-0.5,  0.5,  0.5)
         glVertex3f(-0.5,  0.5, -0.5)
 
         glEnd()
+
+        # Bordas — 12 arestas pretas para contraste visual
+        glLineWidth(2.0)
+        glBegin(GL_LINES)
+        glColor4f(0.0, 0.0, 0.0, a)
+
+        # 4 arestas do topo (y=+0.5)
+        glVertex3f(-0.5,  0.5, -0.5); glVertex3f( 0.5,  0.5, -0.5)
+        glVertex3f( 0.5,  0.5, -0.5); glVertex3f( 0.5,  0.5,  0.5)
+        glVertex3f( 0.5,  0.5,  0.5); glVertex3f(-0.5,  0.5,  0.5)
+        glVertex3f(-0.5,  0.5,  0.5); glVertex3f(-0.5,  0.5, -0.5)
+
+        # 4 arestas da base (y=−0.5)
+        glVertex3f(-0.5, -0.5, -0.5); glVertex3f( 0.5, -0.5, -0.5)
+        glVertex3f( 0.5, -0.5, -0.5); glVertex3f( 0.5, -0.5,  0.5)
+        glVertex3f( 0.5, -0.5,  0.5); glVertex3f(-0.5, -0.5,  0.5)
+        glVertex3f(-0.5, -0.5,  0.5); glVertex3f(-0.5, -0.5, -0.5)
+
+        # 4 arestas verticais
+        glVertex3f(-0.5, -0.5, -0.5); glVertex3f(-0.5,  0.5, -0.5)
+        glVertex3f( 0.5, -0.5, -0.5); glVertex3f( 0.5,  0.5, -0.5)
+        glVertex3f( 0.5, -0.5,  0.5); glVertex3f( 0.5,  0.5,  0.5)
+        glVertex3f(-0.5, -0.5,  0.5); glVertex3f(-0.5,  0.5,  0.5)
+
+        glEnd()
+        glLineWidth(1.0)
 
         if a < 1.0:
             glDisable(GL_BLEND)
@@ -346,7 +364,7 @@ class Cube:
 
         self._validator = None
 
-        # Processa fila apenas se ainda em IDLE (não iniciou fade).
+        # Processa fila apenas se ainda em IDLE (não iniciou queda/fade).
         if self.state != CubeState.IDLE:
             self._queued = None
             return
@@ -356,12 +374,11 @@ class Cube:
             self._queued = None
             self.try_roll(dx, dz, validator)
 
-    def _start_fade_out(self) -> None:
-        """Inicia o ciclo fade out → teleporte → fade in."""
-        self.state = CubeState.FADING_OUT
-        self._fade_t = 0.0
-        self._respawn_t = 0.0
-        self._alpha = 1.0
+    def _start_fall(self) -> None:
+        """Inicia animação de queda → teleporte → fade in."""
+        self.state = CubeState.FALLING
+        self._fall_t = 0.0
+        self._fall_offset_y = 0.0
         self._queued = None
 
     def _sync_position_from_grid(self) -> None:
@@ -442,29 +459,20 @@ def _run_logic_smoke_tests() -> None:
     cube._last_valid_grid_x, cube._last_valid_grid_z = 1, 1
     cube._sync_position_from_grid()
 
-    # Sair do caminho → FADING_OUT após espera
+    # Sair do caminho → FALLING imediato
     assert cube.try_roll(0, 1, validator=bounds)  # vai para (1,2) = empty
     cube.update(ROLL_DURATION)
     assert cube.get_grid_position() == (1, 2)
-    assert cube.state == CubeState.FADING_OUT
+    assert cube.state == CubeState.FALLING
 
-    # Durante FADING_OUT não aceita novo roll
+    # Durante FALLING não aceita novo roll
     assert not cube.try_roll(0, -1, validator=bounds)
 
-    # Espera menos que RESPAWN_DELAY → ainda em FADING_OUT
-    cube.update(RESPAWN_DELAY - 0.1)
-    assert cube.state == CubeState.FADING_OUT
-
-    # Passa do RESPAWN_DELAY em steps pequenos para não pular o fade
-    cube.update(0.05)  # chega em RESPAWN_DELAY; _fade_t começa subir
-    cube.update(0.05)
-    assert cube.state == CubeState.FADING_OUT
-    assert cube._alpha < 1.0  # fade visual em andamento
-
-    # Completa fade out → teleporta → FADING_IN no último bloco válido
-    cube.update(FADE_DURATION)
+    # Queda completa → teleporta automaticamente → FADING_IN no último bloco válido
+    cube.update(FALL_DURATION)
     assert cube.state == CubeState.FADING_IN
     assert cube.get_grid_position() == (1, 1)  # último bloco válido
+    assert cube._alpha == 0.0  # começa invisível
 
     # Fade in completo → IDLE
     cube.update(FADE_DURATION + 0.01)
