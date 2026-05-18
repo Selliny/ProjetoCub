@@ -25,7 +25,8 @@ Controles — edição do bloco na célula selecionada:
   + / =           → aumenta escala XZ do bloco (+0.05)
   - / _           → diminui escala XZ do bloco (−0.05, mín 0.1)
   ESPAÇO          → toggle block.active (bloco some / aparece)
-  G               → gera novo mapa procedural 32×32 aleatório
+  G               → gera novo mapa procedural 32×32 (single-path)
+  F               → gera novo mapa bifurcado 32×32 (Y-split: dois ramos)
 
 Como rodar (raiz do projeto, venv ativado):
 
@@ -311,12 +312,18 @@ def main() -> None:
         if event.key == pygame.K_g:
             map_._grid = Map.generate()._grid
             cursor[0], cursor[1] = 0, 0
-            print("Novo mapa procedural gerado (32×32).")
+            print("Novo mapa single-path gerado (32×32).")
+            return
+
+        if event.key == pygame.K_f:
+            map_._grid = Map.generate(forked=True)._grid
+            cursor[0], cursor[1] = 0, 0
+            print("Novo mapa bifurcado gerado (32×32, Y-split).")
             return
 
     print("=== Sandbox Map ===")
     print("WASD=cursor | ENTER=inserir/remover | P=tipo | 1-4=cor | +/-=escala")
-    print("ESPAÇO=active | G=gerar novo mapa(32×32) | setas+mouse=câmera orbital | Q/E=altura")
+    print("ESPAÇO=active | G=single-path | F=bifurcado(Y-split) | setas+mouse=câmera orbital | Q/E=altura")
     _print_state(_col(), _row(), map_.get_block(_col(), _row()))
 
     run(
