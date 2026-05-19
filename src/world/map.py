@@ -45,294 +45,112 @@ Tipos de célula gerados
     1 → caminho (Block, cor bege)
     2 → início  (Block, cor verde)  — posição inicial do Cube
     3 → fim     (Block, cor vermelha) — destino do Cube
+
+Gerador (drunk grid)
+---------------------
+    Produz uma rede de corredores verticais tortuosos (drunk-walk)
+    conectados por passagens horizontais de espessura dupla. Cada corredor
+    desvia lateralmente ±1 célula por row com probabilidade 35%, e cada
+    curva recebe um "joelho" de preenchimento que elimina becos. O jogador
+    tem múltiplas rotas reais do início ao fim, com interseções orgânicas
+    — sem nenhuma saída cega além do bloco de início (row=0) e fim
+    (row=rows-1).
 """
 
 import random
 
-from src.entities.block import Block, PoweredBlock
+from src.entities.block import Block, EndBlock, GrowBlock, HealBlock, PortalBlock, ShrinkBlock, StartBlock
 from src.graphics.color import Color
 from src.graphics.position import Position
-
-# Cores por tipo de célula — usadas pelo gerador e por add_block() manual.
-_CELL_COLORS: dict[int, Color] = {
-    1: Color(0.78, 0.59, 0.39),  # caminho — bege
-    2: Color(0.20, 0.78, 0.20),  # início  — verde
-    3: Color(0.78, 0.20, 0.20),  # fim     — vermelho
-}
-
-
-def _generate_matrix(
-    cols: int, rows: int, rng: random.Random
-) -> tuple[list[list[int]], tuple[int, int]]:
-    """Gera uma matriz cols×rows com um caminho aleatório de largura ≥ 2.
-
-    Algoritmo — Random Walk com largura dupla e bias de centro:
-    1. Sorteia orientação: Norte→Sul (percorre linhas) ou Leste→Oeste (percorre colunas).
-    2. Início e fim restritos ao intervalo central (margem de 1/4 de cada lado),
-       evitando que o caminho fique totalmente de um lado do mapa.
-    3. Drunk walk do início ao fim com bias de centro:
-       - Quanto mais periférico o caminho, maior a chance de desvio lateral.
-       - Desvios são direcionados ao centro (70%) em vez de totalmente aleatórios.
-    4. set_cell() preenche sempre duas células paralelas — garante largura ≥ 2.
-    5. Segmento reto final conecta o walk ao ponto exato de fim.
-    6. Células de início e fim recebem tipos 2 e 3 respectivamente.
-
-    Retorna: (matrix, start_col_row, direction) onde:
-      - start_col_row é (col, row) da célula de início
-      - direction é (dcol, drow) do passo inicial do caminho (ex: (0,1) = vai para +Z)
-    """
-    grid: list[list[int]] = [[0] * cols for _ in range(rows)]
-
-    # O caminho sempre percorre o eixo Z (Norte→Sul): row=0 → row=rows-1.
-    # Isso garante que W (dz=-1) e S (dz=+1) correspondem ao eixo do caminho,
-    # mantendo a câmera e os controles do cubo sempre alinhados.
-    main_len, cross_len = rows, cols
-    margin = max(1, cross_len // 4)
-    start_cross = rng.randint(margin, cross_len - 2 - margin)
-    end_cross   = rng.randint(margin, cross_len - 2 - margin)
-
-    def set_cell(main: int, cross: int, value: int) -> None:
-        grid[main][cross]     = value
-        grid[main][cross + 1] = value
-
-    def get_start_pos(sc: int) -> tuple[int, int]:
-        return sc, 0  # (col, row)
-
-    direction = (0, 1)  # caminho avança em +Z (row cresce)
-
-    center = (cross_len - 1) / 2.0
-    cross = start_cross
-    for main in range(main_len):
-        set_cell(main, cross, 1)
-
-        remaining = (main_len - 1) - main
-        if remaining == 0:
-            break
-
-        # Nos últimos 2 passos não desvia — garante espaço para o segmento de fechamento.
-        if remaining <= 2:
-            continue
-
-        # Bias de centro: quanto mais periférico, maior a chance de desvio.
-        distance_ratio = abs(cross - center) / max(center, 1.0)
-        deviate_chance = 0.20 + 0.35 * distance_ratio  # 20% no centro, 55% na borda
-
-        if rng.random() < deviate_chance:
-            toward_center = 1 if cross < center else -1
-            # 70% em direção ao centro, 30% em direção contrária.
-            step = toward_center if rng.random() < 0.70 else -toward_center
-            new_cross = cross + step
-            if 0 <= new_cross <= cross_len - 2:
-                cross = new_cross
-
-    # Fecha lateralmente até end_cross na última linha/coluna.
-    step = 1 if end_cross > cross else -1
-    while cross != end_cross:
-        cross += step
-        set_cell(main_len - 1, cross, 1)
-
-    # Sobrescreve início e fim com seus tipos.
-    set_cell(0,            start_cross, 2)
-    set_cell(main_len - 1, end_cross,   3)
-
-    return grid, get_start_pos(start_cross), direction
-
-
-def _generate_matrix_forked(
-    cols: int, rows: int, rng: random.Random
-) -> tuple[list[list[int]], tuple[int, int], tuple[int, int]]:
-    """Gera uma matriz com caminho bifurcado (Y-split).
-
-    Estrutura:
-      rows 0-1        — tronco de início (tipo 2 = verde)
-      row  2          — bifurcação: ramo A (esq) e ramo B (dir) divergem
-      rows 3..rows-4  — cada ramo faz seu próprio drunk-walk independente
-      row  rows-3     — convergência: ambos os ramos se unem em end_cross
-      rows rows-2..rows-1 — tronco de fim (tipo 3 = vermelho)
-    """
-    grid: list[list[int]] = [[0] * cols for _ in range(rows)]
-    center = (cols - 1) / 2.0
-
-    # Margem maior que o single-path para acomodar os dois ramos lado a lado.
-    margin = max(4, cols // 4)
-    start_cross = rng.randint(margin, cols - 2 - margin)
-    end_cross   = rng.randint(margin, cols - 2 - margin)
-
-    def set_row(row: int, col: int, value: int) -> None:
-        """Preenche duas células adjacentes (largura ≥ 2), respeitando bordas."""
-        col = max(0, min(col, cols - 2))
-        grid[row][col]     = value
-        grid[row][col + 1] = value
-
-    def fill_lateral(row: int, c_from: int, c_to: int, value: int) -> None:
-        """Preenche todas as células entre dois pontos na mesma row."""
-        lo = max(0, min(c_from, c_to))
-        hi = min(cols - 1, max(c_from, c_to) + 1)
-        for c in range(lo, hi + 1):
-            grid[row][c] = value
-
-    # Tronco inicial (rows 0 a 2).
-    set_row(0, start_cross, 2)
-    set_row(1, start_cross, 1)
-    set_row(2, start_cross, 1)
-
-    # Posições de bifurcação: garantindo uma distância média entre os ramos A e B.
-    dist = max(4, cols // 4)
-    cross_a = max(0, start_cross - dist)
-    cross_b = min(cols - 2, start_cross + dist)
-
-    # Row 3: preenche lateralmente o tronco até as pontas de cada ramo.
-    fill_lateral(3, cross_a, cross_b + 1, 1)
-
-    # Drunk-walk independente para cada ramo entre rows 4 e rows-5.
-    final_a, final_b = cross_a, cross_b
-    walk_end = rows - 5
-
-    for init_cross, sign, attr in [(cross_a, -1, "a"), (cross_b, +1, "b")]:
-        cross = init_cross
-        for row in range(4, walk_end + 1):
-            set_row(row, cross, 1)
-            remaining = walk_end - row
-            
-            # Nos últimos blocos, força o caminho a se aproximar do destino (end_cross)
-            # para evitar uma "parede" reta de convergência.
-            dist_to_end = abs(cross - end_cross)
-            if remaining <= dist_to_end + 1 and cross != end_cross:
-                step = 1 if end_cross > cross else -1
-                new_cross = cross + step
-                if 0 <= new_cross <= cols - 2:
-                    cross = new_cross
-                continue
-
-            if remaining <= 1:
-                continue
-
-            distance_ratio = abs(cross - center) / max(center, 1.0)
-            deviate_chance = 0.20 + 0.35 * distance_ratio
-            if rng.random() < deviate_chance:
-                # No terço final do mapa, a preferência muda para ir em direção ao end_cross
-                if remaining < rows // 3:
-                    preferred = 1 if end_cross > cross else -1
-                    allow_cross_center = True
-                else:
-                    preferred = sign
-                    allow_cross_center = False
-                
-                step = preferred if rng.random() < 0.85 else -preferred
-                new_cross = cross + step
-                
-                if not allow_cross_center:
-                    # Evitar que os ramos cruzem o centro do mapa cedo demais
-                    if attr == "a" and new_cross > center - 1:
-                        new_cross = cross
-                    elif attr == "b" and new_cross < center + 1:
-                        new_cross = cross
-                
-                if 0 <= new_cross <= cols - 2:
-                    cross = new_cross
-        if attr == "a":
-            final_a = cross
-        else:
-            final_b = cross
-
-    # Row rows-4: convergência lateral fina (caso algum ainda não tenha chegado perfeitamente)
-    conv_row = rows - 4
-    fill_lateral(conv_row, min(final_a, end_cross), max(final_a, end_cross) + 1, 1)
-    fill_lateral(conv_row, min(final_b, end_cross), max(final_b, end_cross) + 1, 1)
-
-    # Tronco final (rows rows-3 a rows-1).
-    set_row(rows - 3, end_cross, 1)
-    set_row(rows - 2, end_cross, 1)
-    set_row(rows - 1, end_cross, 3)
-
-    return grid, (start_cross, 0), (0, 1)
-
-
-def _matrix_to_map(
-    matrix: list[list[int]],
-    start: tuple[int, int],
-    direction: tuple[int, int],
-    rng: random.Random,
-) -> "Map":
-    """Converte uma matriz de inteiros num Map populado com Blocks."""
-    m = Map()
-    m.start = start
-    m.direction = direction
-    for row_idx, row in enumerate(matrix):
-        for col_idx, cell in enumerate(row):
-            template = _CELL_COLORS.get(cell)
-            if template is None:
-                continue
-            pos   = Position(x=float(col_idx), y=0.0, z=float(row_idx))
-            
-            # Se for célula de caminho comum (1), tem a chance de virar poder:
-            if cell == 1:
-                r = rng.random()
-                if r < 0.02:
-                    color = Color(0.5, 0.0, 0.8)
-                    block = PoweredBlock(power="shrink", position=pos, color=color)
-                elif r < 0.1:
-                    color = Color(0.1, 0.5, 1.0)
-                    block = PoweredBlock(power="grow", position=pos, color=color)
-                else:
-                    color = Color(template.r, template.g, template.b)
-                    block = Block(position=pos, color=color)
-            else:
-                color = Color(template.r, template.g, template.b)
-                block = Block(position=pos, color=color)
-                
-            m.add_block(block, col=col_idx, row=row_idx)
-    return m
 
 
 class Map:
     DEFAULT_COLS: int = 32
     DEFAULT_ROWS: int = 32
 
+    # Cores por tipo de célula (0=vazio, 1=caminho, 2=início, 3=fim).
+    CELL_COLORS: dict[int, Color] = {
+        1: Color(0.78, 0.59, 0.39),
+        2: Color(0.20, 0.78, 0.20),
+        3: Color(0.78, 0.20, 0.20),
+    }
+
+    # Probabilidades acumuladas de geração de blocos especiais (por célula de caminho).
+    PROB_HEAL:   float = 0.005   # ~0.5%  — rosa,  recupera 1 vida (uso único)
+    PROB_SHRINK: float = 0.025   # ~2.0%  — roxo,  diminui o cubo
+    PROB_GROW:   float = 0.040   # ~1.5%  — azul,  aumenta o cubo (menor que shrink)
+    PROB_PORTAL: float = 0.050   # ~2.0%  — azul escuro, teleporta aleatoriamente
+
+    # Parâmetros do gerador drunk-grid.
+    LANE_GAP:       int   = 2     # células vazias mínimas entre corredores
+    DEVIATE_CHANCE: float = 0.35  # chance de desvio lateral por row
+    CROSS_DENSITY:  float = 0.75  # chance de ponte entre corredores vizinhos por banda
+
     def __init__(self) -> None:
-        # Dicionário esparso: só células ocupadas existem aqui.
-        # Chave: (col, row) — inteiros de grade, não coordenadas de mundo.
         self._grid: dict[tuple[int, int], Block] = {}
-        # Posição (col, row) da célula de início — definida por generate().
         self.start: tuple[int, int] = (0, 0)
-        # Direção (dcol, drow) do passo inicial do caminho — definida por generate().
         self.direction: tuple[int, int] = (0, 1)
+
+    # ------------------------------------------------------------------
+    # API pública — manipulação do grid
+    # ------------------------------------------------------------------
 
     def add_block(self, block: Block, col: int, row: int) -> None:
         """Registra um bloco na célula (col, row). Substitui se já existir."""
         self._grid[(col, row)] = block
 
     def get_block(self, col: int, row: int) -> Block | None:
-        # Retorna None para célula vazia — verifique antes de acessar .power ou .active.
         return self._grid.get((col, row))
 
     def remove_block(self, col: int, row: int) -> None:
-        """Remove o bloco da célula (col, row), se houver."""
         self._grid.pop((col, row), None)
 
+    def draw(self) -> None:
+        for block in self._grid.values():
+            block.draw()
+
+    # ------------------------------------------------------------------
+    # MovementValidator (protocolo duck-typed usado pelo Cube)
+    # ------------------------------------------------------------------
+
     def can_move_to(self, grid_x: int, grid_z: int) -> bool:
-        """MovementValidator: retorna True se a célula contém um bloco ativo."""
         block = self._grid.get((grid_x, grid_z))
         return block is not None and block.active
 
     def get_tile_type(self, grid_x: int, grid_z: int) -> str:
-        """MovementValidator: classifica a célula para reações do cubo."""
         block = self._grid.get((grid_x, grid_z))
         if block is None or not block.active:
             return "empty"
         return "floor"
 
     def get_power(self, grid_x: int, grid_z: int) -> str | None:
-        """MovementValidator: retorna o nome do poder armazenado na célula, se existir."""
         block = self._grid.get((grid_x, grid_z))
         if block is not None and block.active and block.is_powered:
             return getattr(block, "power", None)
         return None
 
-    def draw(self) -> None:
-        # Delega para cada bloco — blocos com active=False se ignoram sozinhos.
-        for block in self._grid.values():
-            block.draw()
+    def get_random_position(self) -> tuple[int, int]:
+        """Retorna uma posição aleatória do grid (pode ser vazia — o cubo cai)."""
+        import random
+        keys = list(self._grid.keys())
+        col, row = random.choice(keys)
+        return col, row
+
+    def consume_power(self, grid_x: int, grid_z: int) -> None:
+        """Converte o PoweredBlock na célula em Block comum, consumindo o poder."""
+        block = self._grid.get((grid_x, grid_z))
+        if block is None or not block.is_powered:
+            return
+        self._grid[(grid_x, grid_z)] = Block(
+            position=block.position,
+            color=Map.CELL_COLORS[1],
+            size=block.size,
+            active=block.active,
+        )
+
+    # ------------------------------------------------------------------
+    # Geração procedural
+    # ------------------------------------------------------------------
 
     @classmethod
     def generate(
@@ -340,21 +158,271 @@ class Map:
         cols: int = DEFAULT_COLS,
         rows: int = DEFAULT_ROWS,
         seed: int | None = None,
-        forked: bool = False,
+        gap: int = LANE_GAP,
+        deviate_chance: float = DEVIATE_CHANCE,
+        cross_density: float = CROSS_DENSITY,
+        prob_heal: float = PROB_HEAL,
+        prob_shrink: float = PROB_SHRINK,
+        prob_grow: float = PROB_GROW,
+        prob_portal: float = PROB_PORTAL,
     ) -> "Map":
-        """Gera um mapa procedural com caminho aleatório de largura ≥ 2.
+        """Gera um mapa procedural com corredores tortuosos (drunk grid).
 
-        O início fica em uma borda e o fim na borda oposta. O caminho é
-        contínuo — sem fendas — garantindo que o Cube consiga atravessá-lo.
-        O atributo map.start indica a célula (col, row) de início do Cube.
+        Todos os parâmetros têm padrões definidos como constantes de classe,
+        mas podem ser sobrescritos individualmente pelos sandboxes.
+        A largura de cada corredor (1 ou 2 células) é sorteada individualmente
+        pelo gerador — não é mais um parâmetro global.
 
         Args:
-            cols:   largura do grid em células (padrão: 32).
-            rows:   altura do grid em células (padrão: 32).
-            seed:   semente do RNG. None = diferente a cada chamada.
-            forked: True = caminho bifurcado (Y-split); False = single-path (padrão).
+            cols:           largura do grid em células.
+            rows:           altura do grid em células.
+            seed:           semente do RNG (None = aleatório a cada chamada).
+            gap:            células vazias mínimas entre corredores.
+            deviate_chance: probabilidade de desvio lateral por row.
+            cross_density:  probabilidade de ponte entre corredores vizinhos por banda.
+            prob_heal:      chance acumulada de bloco de cura (rosa).
+            prob_shrink:    chance acumulada de bloco de diminuição (roxo).
+            prob_grow:      chance acumulada de bloco de crescimento (azul).
         """
         rng = random.Random(seed)
-        fn = _generate_matrix_forked if forked else _generate_matrix
-        matrix, start, direction = fn(cols, rows, rng)
-        return _matrix_to_map(matrix, start, direction, rng)
+        matrix, start, direction = cls._build_matrix(
+            cols, rows, rng, gap, deviate_chance, cross_density
+        )
+        return cls._matrix_to_map(matrix, start, direction, rng, prob_heal, prob_shrink, prob_grow, prob_portal)
+
+    # ------------------------------------------------------------------
+    # Métodos privados — geração da matriz e conversão para Map
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_matrix(
+        cols: int,
+        rows: int,
+        rng: random.Random,
+        gap: int,
+        deviate_chance: float,
+        cross_density: float,
+    ) -> tuple[list[list[int]], tuple[int, int], tuple[int, int]]:
+        """Drunk-grid: corredores verticais tortuosos conectados por pontes horizontais.
+
+        Cada corredor tem largura 1 ou 2 sorteada individualmente.
+        Retorna (matrix, start_pos, direction).
+        """
+        grid: list[list[int]] = [[0] * cols for _ in range(rows)]
+
+        # ── 1. Posições base e larguras dos corredores ────────────────────
+        # Usa stride máximo (2 + gap) para reservar espaço suficiente para
+        # qualquer largura sorteada. As larguras reais são definidas depois.
+        max_lane_w = 2
+        stride = max_lane_w + gap
+
+        lane_bases: list[int] = []
+        c = gap
+        while c + max_lane_w <= cols - gap:
+            lane_bases.append(c)
+            c += stride
+
+        if not lane_bases:
+            lane_bases = [gap, gap + max(1, cols // 2)]
+
+        n_lanes = len(lane_bases)
+
+        # Cada corredor sorteia largura 1 ou 2 independentemente.
+        lane_widths: list[int] = [rng.choice([1, 2]) for _ in range(n_lanes)]
+
+        # ── 2. Drunk-walk de cada corredor ────────────────────────────────
+        lane_paths: list[list[int]] = []
+
+        for li, base in enumerate(lane_bases):
+            w = lane_widths[li]
+
+            # Limites que preservam o gap em relação aos vizinhos,
+            # levando em conta a largura real de cada corredor vizinho.
+            if li > 0:
+                lo = lane_bases[li - 1] + lane_widths[li - 1] + gap
+            else:
+                lo = 0
+            if li < n_lanes - 1:
+                hi = lane_bases[li + 1] - w - gap
+            else:
+                hi = cols - w
+
+            col_cur = base
+            path: list[int] = []
+
+            for r in range(rows):
+                path.append(col_cur)
+
+                for lc in range(w):
+                    cc = col_cur + lc
+                    if 0 <= cc < cols:
+                        grid[r][cc] = 1
+
+                if r == rows - 1:
+                    break
+
+                if rng.random() < deviate_chance:
+                    step = rng.choice([-1, 1])
+                    new_col = col_cur + step
+                    if lo <= new_col and new_col + w - 1 <= hi:
+                        # Joelho de curva: célula de transição em r+1 para que
+                        # os dois segmentos compartilhem ao menos 1 célula.
+                        knee_col = col_cur if step == 1 else new_col + w - 1
+                        if 0 <= r + 1 < rows and 0 <= knee_col < cols:
+                            grid[r + 1][knee_col] = 1
+                        col_cur = new_col
+
+            lane_paths.append(path)
+
+        # ── 3. Pontes horizontais em bandas ───────────────────────────────
+        # Mais bandas = mais oportunidades de ponte ao longo da altura.
+        # A espessura de cada ponte usa a menor largura dos dois corredores ligados.
+        n_bands = max(5, rows // max(1, stride))
+        band_size = max(1, rows // n_bands)
+
+        def paint_bridge(r: int, c_left: int, c_right: int, thickness: int) -> None:
+            lo_c, hi_c = min(c_left, c_right), max(c_left, c_right)
+            for br in range(thickness):
+                target_row = r + br
+                if 0 < target_row < rows - 1:
+                    for cc in range(lo_c, hi_c + 1):
+                        if 0 <= cc < cols:
+                            grid[target_row][cc] = 1
+
+        for band in range(n_bands):
+            row_lo = band * band_size + 1
+            row_hi = min((band + 1) * band_size - 1, rows - 2)
+            if row_lo >= row_hi:
+                continue
+            for i in range(n_lanes - 1):
+                if rng.random() > cross_density:
+                    continue
+                br = rng.randint(row_lo, row_hi)
+                right_edge = lane_paths[i][br] + lane_widths[i] - 1
+                left_edge  = lane_paths[i + 1][br]
+                thickness  = min(lane_widths[i], lane_widths[i + 1])
+                paint_bridge(br, right_edge, left_edge, thickness)
+
+        # ── 4. Garantia de conectividade ──────────────────────────────────
+        # Força ao menos uma ponte no meio para cada par de vizinhos sem nenhuma.
+        for i in range(n_lanes - 1):
+            mid = rows // 2
+            right_edge = lane_paths[i][mid] + lane_widths[i] - 1
+            left_edge  = lane_paths[i + 1][mid]
+            gap_col = right_edge + 1
+            has_bridge = (
+                0 <= gap_col < cols
+                and any(grid[r][gap_col] == 1 for r in range(1, rows - 1))
+            )
+            if not has_bridge:
+                thickness = min(lane_widths[i], lane_widths[i + 1])
+                paint_bridge(mid, right_edge, left_edge, thickness)
+
+        # ── 5. Início e fim em cantos opostos ─────────────────────────────
+        if rng.random() < 0.5:
+            start_li, end_li = 0, n_lanes - 1
+        else:
+            start_li, end_li = n_lanes - 1, 0
+
+        start_col = lane_paths[start_li][0]
+        end_col   = lane_paths[end_li][rows - 1]
+
+        for lc in range(lane_widths[start_li]):
+            if start_col + lc < cols:
+                grid[0][start_col + lc] = 2
+        for lc in range(lane_widths[end_li]):
+            if end_col + lc < cols:
+                grid[rows - 1][end_col + lc] = 3
+
+        # ── 6. Remoção iterativa de becos ─────────────────────────────────
+        # Células protegidas: início (row 0) e fim (row rows-1) e seus vizinhos
+        # imediatos na direção do percurso — nunca podem ser removidos.
+        protected: set[tuple[int, int]] = set()
+        for c in range(cols):
+            if grid[0][c] > 0:
+                protected.add((0, c))
+                if grid[1][c] > 0:
+                    protected.add((1, c))
+            if grid[rows - 1][c] > 0:
+                protected.add((rows - 1, c))
+                if grid[rows - 2][c] > 0:
+                    protected.add((rows - 2, c))
+
+        def degree(r: int, c: int) -> int:
+            return sum(
+                1
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1))
+                if 0 <= r + dr < rows and 0 <= c + dc < cols and grid[r + dr][c + dc] > 0
+            )
+
+        changed = True
+        while changed:
+            changed = False
+            for r in range(rows):
+                for c in range(cols):
+                    if grid[r][c] != 1:
+                        continue
+                    if (r, c) in protected:
+                        continue
+                    if degree(r, c) <= 1:
+                        grid[r][c] = 0
+                        changed = True
+
+        return grid, (start_col, 0), (0, 1)
+
+    @staticmethod
+    def _matrix_to_map(
+        matrix: list[list[int]],
+        start: tuple[int, int],
+        direction: tuple[int, int],
+        rng: random.Random,
+        prob_heal: float,
+        prob_shrink: float,
+        prob_grow: float,
+        prob_portal: float,
+    ) -> "Map":
+        """Converte uma matriz de inteiros num Map populado com Blocks."""
+        m = Map()
+        m.start = start
+        m.direction = direction
+
+        for row_idx, row in enumerate(matrix):
+            for col_idx, cell in enumerate(row):
+                template = Map.CELL_COLORS.get(cell)
+                if template is None:
+                    continue
+
+                pos = Position(x=float(col_idx), y=0.0, z=float(row_idx))
+
+                if cell == 1:
+                    rv = rng.random()
+                    if rv < prob_heal:
+                        block: Block = HealBlock(
+                            position=pos,
+                            color=Color(1.0, 0.4, 0.7),
+                        )
+                    elif rv < prob_shrink:
+                        block = ShrinkBlock(
+                            position=pos,
+                            color=Color(0.5, 0.0, 1.0),
+                        )
+                    elif rv < prob_grow:
+                        block = GrowBlock(
+                            position=pos,
+                            color=Color(0.2, 1.0, 0.2),
+                        )
+                    elif rv < prob_portal:
+                        block = PortalBlock(
+                            position=pos,
+                            color=Color(0.0, 0.1, 0.4),
+                        )
+                    else:
+                        block = Block(position=pos, color=Color(template.r, template.g, template.b))
+                elif cell == 2:
+                    block = StartBlock(position=pos, color=Color(template.r, template.g, template.b))
+                else:
+                    block = EndBlock(position=pos, color=Color(template.r, template.g, template.b))
+
+                m.add_block(block, col=col_idx, row=row_idx)
+
+        return m
