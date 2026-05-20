@@ -49,30 +49,39 @@ from OpenGL.GL import (
     glViewport,
 )
 from OpenGL.GLU import gluLookAt, gluPerspective
-from pygame.locals import DOUBLEBUF, OPENGL
+from pygame.locals import DOUBLEBUF, FULLSCREEN, OPENGL
 
 from sandboxes.menu import run_menu
 from src.entities.cube import Cube, CubeState
 from src.graphics.position import Position
 from src.world.map import Map
 
-# ── Configuração de tela ───────────────────────────────────────────────────────
-_SCREEN_W = 1920
-_SCREEN_H = 1080
+# ── Configuração de tela (resolução nativa detectada em runtime) ───────────────
+pygame.init()
+_info = pygame.display.Info()
+_SCREEN_W = _info.current_w
+_SCREEN_H = _info.current_h
+pygame.quit()
 
 # ── HUD ───────────────────────────────────────────────────────────────────────
 _HUD_HEART_SIZE  = 28
 _HUD_MARGIN      = 16
 _HUD_SPACING     = 6
-_HUD_LEGEND_BOX    = 20
-_HUD_LEGEND_GAP    = 4
-_HUD_LEGEND_STRIDE = 52
+_HUD_LEGEND_BOX    = 18
+_HUD_LEGEND_GAP    = 3
+_HUD_LEGEND_STRIDE = 70
 
 _LEGEND_ITEMS: list[tuple[tuple[float, float, float, float], str]] = [
-    ((1.0, 0.4, 0.7, 1.0), "Heal"),
-    ((0.5, 0.0, 0.8, 1.0), "Shrink"),
-    ((0.1, 0.5, 1.0, 1.0), "Grow"),
-    ((0.0, 0.1, 0.4, 1.0), "Portal"),
+    ((1.0, 0.4, 0.7, 1.0),  "Heal"),
+    ((0.5, 0.0, 1.0, 1.0),  "Shrink"),
+    ((0.2, 1.0, 0.2, 1.0),  "Grow"),
+    ((0.0, 0.1, 0.4, 1.0),  "Portal"),
+    ((0.55, 0.88, 1.0, 1.0),"Ice"),
+    ((0.85, 0.0, 0.55, 1.0),"Invert"),
+    ((0.72, 0.72, 0.72, 1.0),"Fragile"),
+    ((1.0, 0.45, 0.0, 1.0), "Bounce"),
+    ((0.2, 0.45, 0.15, 1.0),"Slow"),
+    ((0.85, 0.65, 0.05, 1.0),"Check"),
 ]
 
 _font: pygame.font.Font | None = None
@@ -229,7 +238,7 @@ def main() -> None:
 
     # ── Inicialização OpenGL ──────────────────────────────────────────────
     pygame.init()
-    pygame.display.set_mode((_SCREEN_W, _SCREEN_H), DOUBLEBUF | OPENGL)
+    pygame.display.set_mode((_SCREEN_W, _SCREEN_H), DOUBLEBUF | OPENGL | FULLSCREEN)
     pygame.display.set_caption(f"Cub Project! [{diff.label}]")
 
     glViewport(0, 0, _SCREEN_W, _SCREEN_H)
@@ -245,10 +254,18 @@ def main() -> None:
         return Map.generate(
             cols=diff.cols,
             rows=diff.rows,
+            n_paths=diff.n_paths,
+            arc_noise=diff.arc_noise,
             prob_heal=diff.prob_heal,
             prob_shrink=diff.prob_shrink,
             prob_grow=diff.prob_grow,
             prob_portal=diff.prob_portal,
+            prob_ice=diff.prob_ice,
+            prob_invert=diff.prob_invert,
+            prob_fragile=diff.prob_fragile,
+            prob_bounce=diff.prob_bounce,
+            prob_slow=diff.prob_slow,
+            prob_checkpoint=diff.prob_checkpoint,
         )
 
     map_: list[Map] = [_new_map()]
@@ -315,7 +332,8 @@ def main() -> None:
             dt = (now_ms - last_frame_ms[0]) / 1000.0
         last_frame_ms[0] = now_ms
 
-        # Atualiza cubo
+        # Atualiza mapa (FragileBlock timers) e cubo
+        map_[0].update(dt)
         c = cube[0]
         c.update(dt)
 
@@ -331,12 +349,15 @@ def main() -> None:
             _reset("GAME OVER — sem vidas, reiniciando")
             continue
 
-        # Input de movimento
+        # Input de movimento (respeita inversão de controles)
         keys = pygame.key.get_pressed()
         if not c.is_moving():
             for key, direction in _CUBE_KEYS.items():
                 if keys[key]:
-                    c.try_roll(*direction, validator=map_[0])
+                    dx, dz = direction
+                    if c.controls_inverted:
+                        dx, dz = -dx, -dz
+                    c.try_roll(dx, dz, validator=map_[0])
                     break
 
         # Input de câmera

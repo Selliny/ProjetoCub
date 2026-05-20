@@ -11,7 +11,10 @@ from dataclasses import dataclass
 
 import pygame
 
-_W, _H = 1920, 1080
+pygame.init()
+_info = pygame.display.Info()
+_W, _H = _info.current_w, _info.current_h
+pygame.quit()
 
 # Paleta terminal verde-fósforo
 _BG       = (  4,  10,   4)   # preto quase puro
@@ -42,36 +45,68 @@ class DifficultyConfig:
     label: str
     cols: int
     rows: int
+    n_paths: int
+    arc_noise: float
     prob_heal: float
     prob_shrink: float
     prob_grow: float
     prob_portal: float
+    prob_ice: float
+    prob_invert: float
+    prob_fragile: float
+    prob_bounce: float
+    prob_slow: float
+    prob_checkpoint: float
 
 
 _DIFFICULTIES: list[DifficultyConfig] = [
     DifficultyConfig(
         label="FACIL",
-        cols=16, rows=16,
+        cols=24, rows=14,
+        n_paths=4,
+        arc_noise=0.10,
         prob_heal=0.06,
         prob_shrink=0.01,
         prob_grow=0.005,
         prob_portal=0.012,
+        prob_ice=0.020,
+        prob_invert=0.008,
+        prob_fragile=0.015,
+        prob_bounce=0.012,
+        prob_slow=0.010,
+        prob_checkpoint=0.018,
     ),
     DifficultyConfig(
         label="MEDIO",
-        cols=32, rows=32,
+        cols=36, rows=20,
+        n_paths=4,
+        arc_noise=0.20,
         prob_heal=0.005,
         prob_shrink=0.04,
         prob_grow=0.002,
         prob_portal=0.050,
+        prob_ice=0.030,
+        prob_invert=0.020,
+        prob_fragile=0.030,
+        prob_bounce=0.018,
+        prob_slow=0.015,
+        prob_checkpoint=0.012,
     ),
     DifficultyConfig(
         label="DIFICIL",
-        cols=56, rows=56,
+        cols=56, rows=30,
+        n_paths=4,
+        arc_noise=0.30,
         prob_heal=0.001,
         prob_shrink=0.08,
         prob_grow=0.002,
         prob_portal=0.090,
+        prob_ice=0.040,
+        prob_invert=0.035,
+        prob_fragile=0.050,
+        prob_bounce=0.025,
+        prob_slow=0.020,
+        prob_checkpoint=0.008,
     ),
 ]
 
@@ -148,7 +183,7 @@ def run_menu() -> DifficultyConfig | None:
     pygame.init()
     pygame.font.init()
 
-    screen = pygame.display.set_mode((_W, _H))
+    screen = pygame.display.set_mode((_W, _H), pygame.FULLSCREEN)
     pygame.display.set_caption("Cub Project!")
     clock = pygame.time.Clock()
 
