@@ -51,7 +51,7 @@ from OpenGL.GL import (
 from OpenGL.GLU import gluLookAt, gluPerspective
 from pygame.locals import DOUBLEBUF, FULLSCREEN, OPENGL
 
-from sandboxes.menu import run_menu
+from sandboxes.menu import run_end_screen, run_menu
 from src.entities.cube import Cube, CubeState
 from src.graphics.position import Position
 from src.world.map import Map
@@ -348,6 +348,11 @@ def main() -> None:
         if c.is_dead and c.state == CubeState.IDLE:
             _reset("GAME OVER — sem vidas, reiniciando")
             continue
+
+        if c.reached_end and c.state == CubeState.IDLE:
+            pygame.quit()
+            run_end_screen(c.lives, c.max_lives, diff.label)
+            return
 
         # Input de movimento (respeita inversão de controles)
         keys = pygame.key.get_pressed()

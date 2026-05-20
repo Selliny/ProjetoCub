@@ -145,6 +145,8 @@ class Map:
         block = self._grid.get((grid_x, grid_z))
         if block is None or not block.active:
             return "empty"
+        if isinstance(block, EndBlock):
+            return "end"
         return "floor"
 
     def get_power(self, grid_x: int, grid_z: int) -> str | None:

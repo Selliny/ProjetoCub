@@ -317,3 +317,80 @@ def run_menu() -> DifficultyConfig | None:
 
     pygame.quit()
     return None
+
+
+def run_end_screen(lives: int, max_lives: int, label: str | None = None) -> None:
+    pygame.init()
+    pygame.font.init()
+
+    screen = pygame.display.set_mode((_W, _H), pygame.FULLSCREEN)
+    pygame.display.set_caption("Cub Project! - Fim")
+    clock = pygame.time.Clock()
+
+    font_title = pygame.font.SysFont("couriernew", 88, bold=True)
+    font_mid   = pygame.font.SysFont("couriernew", 32, bold=True)
+    font_text  = pygame.font.SysFont("couriernew", 24)
+    font_small = pygame.font.SysFont("couriernew", 20)
+    font_hint  = pygame.font.SysFont("couriernew", 22)
+
+    angle = 0.0
+    blink_t = 0.0
+    cursor_visible = True
+
+    cube_cx = _W * 0.78
+    cube_cy = _H * 0.52
+    cube_size = 220.0
+
+    while True:
+        dt = clock.tick(60) / 1000.0
+        angle += dt * 1.1
+        blink_t += dt
+        if blink_t >= 0.53:
+            blink_t = 0.0
+            cursor_visible = not cursor_visible
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                return
+            if event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
+                    pygame.quit()
+                    return
+
+        screen.fill(_BG)
+
+        _draw_cube(screen, angle, cube_cx, cube_cy, cube_size)
+        _draw_border(screen, font_small)
+
+        title_surf = font_title.render("PARABENS!", True, _GREEN_HI)
+        screen.blit(title_surf, (_W // 4 - title_surf.get_width() // 2, 70))
+
+        sep_y = 70 + title_surf.get_height() + 10
+        pygame.draw.line(screen, _GREEN_DIM, (40, sep_y), (_W // 2 - 40, sep_y), 1)
+
+        msg = "VOCE CHEGOU AO FIM DO CAMINHO"
+        msg_surf = font_mid.render(msg, True, _GREEN)
+        screen.blit(msg_surf, (_W // 4 - msg_surf.get_width() // 2, sep_y + 30))
+
+        lives_text = f"VIDAS FINAIS: {lives}/{max_lives}"
+        lives_surf = font_text.render(lives_text, True, _GREEN_DIM)
+        screen.blit(lives_surf, (_W // 4 - lives_surf.get_width() // 2, sep_y + 90))
+
+        if label is not None:
+            diff_text = f"DIFICULDADE: {label}"
+            diff_surf = font_text.render(diff_text, True, _GREEN_DIM)
+            screen.blit(diff_surf, (_W // 4 - diff_surf.get_width() // 2, sep_y + 130))
+
+        prompt = "> ENTER PARA SAIR" + ("_" if cursor_visible else " ")
+        prompt_surf = font_text.render(prompt, True, _AMBER)
+        screen.blit(prompt_surf, (_W // 4 - prompt_surf.get_width() // 2, _H - 120))
+
+        hint_text = "ESC/ENTER para sair"
+        hint_surf = font_hint.render(hint_text, True, _GREEN_DIM)
+        screen.blit(hint_surf, ((_W - hint_surf.get_width()) // 2, _H - 48))
+
+        _draw_scanlines(screen)
+        pygame.display.flip()
+
+    pygame.quit()

@@ -139,6 +139,9 @@ class Cube:
         self._checkpoint_x: int | None = None
         self._checkpoint_z: int | None = None
 
+        # Estado de vitória
+        self._reached_end: bool = False
+
     # ------------------------------------------------------------------
     # API pública
     # ------------------------------------------------------------------
@@ -146,6 +149,10 @@ class Cube:
     @property
     def controls_inverted(self) -> bool:
         return self._invert_timer > 0.0
+
+    @property
+    def reached_end(self) -> bool:
+        return self._reached_end
 
     @property
     def checkpoint_active(self) -> bool:
@@ -234,7 +241,7 @@ class Cube:
                     tile = self._validator.get_tile_type(
                         round(self.grid_x), round(self.grid_z)
                     )
-                    self._portal_landing_is_void = (tile != "floor")
+                    self._portal_landing_is_void = (not self._is_walkable(tile))
                 self.state = CubeState.FADING_IN
             return
 
@@ -270,6 +277,9 @@ class Cube:
         return self.grid_x + dx, self.grid_z + dz
 
     def on_tile_enter(self, tile_type: str) -> None:
+        if tile_type == "end":
+            self._reached_end = True
+            return
         if tile_type != "floor":
             self._start_fall()
 
@@ -299,6 +309,7 @@ class Cube:
         self._slide_t = 0.0
         self._slide_validator = None
 
+        self._reached_end = False
     def apply_transform(self) -> None:
         if self.state == CubeState.ROLLING:
             self._apply_roll_transform()
@@ -389,6 +400,9 @@ class Cube:
             return 0, 0
         return dx, dz
 
+    def _is_walkable(self, tile: str) -> bool:
+        return tile in ("floor", "end")
+
     def _enqueue_roll(self, dx: int, dz: int, validator: MovementValidator | None) -> bool:
         if self._queued is not None:
             return False
@@ -426,11 +440,12 @@ class Cube:
         if self._slow_moves_left > 0:
             self._slow_moves_left -= 1
 
-        if self._validator is not None:
+        validator = self._validator
+        if validator is not None:
             map_x = round(self.grid_x)
             map_z = round(self.grid_z)
-            tile  = self._validator.get_tile_type(map_x, map_z)
-            power = self._validator.get_power(map_x, map_z)
+            tile  = validator.get_tile_type(map_x, map_z)
+            power = validator.get_power(map_x, map_z)
 
             # ── Poderes existentes ─────────────────────────────────────
             if power == "shrink" and self.step_size != 0.5:
@@ -444,23 +459,23 @@ class Cube:
                 self.size.sx = self.size.sy = self.size.sz = 1.0
                 self.grid_x = round(self.grid_x)
                 self.grid_z = round(self.grid_z)
-                if hasattr(self._validator, "consume_power"):
-                    self._validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
+                if hasattr(validator, "consume_power"):
+                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
 
             elif power == "heal" and self.lives < self.max_lives:
                 self.lives += 1
-                if hasattr(self._validator, "consume_power"):
-                    self._validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
+                if hasattr(validator, "consume_power"):
+                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
 
             elif power == "portal":
-                if hasattr(self._validator, "get_random_position"):
-                    tx, tz = self._validator.get_random_position()  # type: ignore[union-attr]
+                if hasattr(validator, "get_random_position"):
+                    tx, tz = validator.get_random_position()  # type: ignore[union-attr]
                 else:
                     import random as _random
                     tx = round(self.grid_x) + _random.randint(-5, 5)
                     tz = round(self.grid_z) + _random.randint(-5, 5)
-                if hasattr(self._validator, "consume_power"):
-                    self._validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
+                if hasattr(validator, "consume_power"):
+                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
                 self._start_portal(tx, tz)
                 return
 
@@ -476,13 +491,13 @@ class Cube:
                     self._invert_timer = 0.0
                 else:
                     self._invert_timer = Cube.INVERT_DURATION
-                if hasattr(self._validator, "consume_power"):
-                    self._validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
+                if hasattr(validator, "consume_power"):
+                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
 
             elif power == "fragile":
                 # Avisa o Map para iniciar contagem regressiva de desativação
-                if hasattr(self._validator, "schedule_fragile"):
-                    self._validator.schedule_fragile(map_x, map_z)  # type: ignore[union-attr]
+                if hasattr(validator, "schedule_fragile"):
+                    validator.schedule_fragile(map_x, map_z)  # type: ignore[union-attr]
 
             elif power == "bounce":
                 # Lança 2 casas à frente; para na 1ª se a 2ª for vazia
@@ -492,12 +507,12 @@ class Cube:
                     t2x = map_x + saved_dx * 2
                     t2z = map_z + saved_dz * 2
                     has_t2 = (
-                        hasattr(self._validator, "get_tile_type")
-                        and self._validator.get_tile_type(t2x, t2z) == "floor"
+                        hasattr(validator, "get_tile_type")
+                        and self._is_walkable(validator.get_tile_type(t2x, t2z))
                     )
                     has_t1 = (
-                        hasattr(self._validator, "get_tile_type")
-                        and self._validator.get_tile_type(t1x, t1z) == "floor"
+                        hasattr(validator, "get_tile_type")
+                        and self._is_walkable(validator.get_tile_type(t1x, t1z))
                     )
                     if has_t2:
                         target_x, target_z = t2x, t2z
@@ -509,22 +524,22 @@ class Cube:
                     self.grid_z = target_z + (0.25 if self.step_size == 0.5 else 0)
                     self._sync_position_from_grid()
                     map_x, map_z = round(self.grid_x), round(self.grid_z)
-                    tile = self._validator.get_tile_type(map_x, map_z)
+                    tile = validator.get_tile_type(map_x, map_z)
 
             elif power == "slow":
                 self._slow_moves_left = Cube.SLOW_MOVES
-                if hasattr(self._validator, "consume_power"):
-                    self._validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
+                if hasattr(validator, "consume_power"):
+                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
 
             elif power == "checkpoint":
                 cx, cz = map_x, map_z
                 # Notifica o Map para atualizar visual do checkpoint anterior
-                if hasattr(self._validator, "set_checkpoint"):
-                    self._validator.set_checkpoint(cx, cz)  # type: ignore[union-attr]
+                if hasattr(validator, "set_checkpoint"):
+                    validator.set_checkpoint(cx, cz)  # type: ignore[union-attr]
                 self._checkpoint_x = cx
                 self._checkpoint_z = cz
 
-            if tile == "floor":
+            if self._is_walkable(tile):
                 self._last_valid_grid_x = round(self.grid_x)
                 self._last_valid_grid_z = round(self.grid_z)
             self.on_tile_enter(tile)
@@ -542,7 +557,7 @@ class Cube:
             sdx, sdz = self._ice_slide_dx, self._ice_slide_dz
             self._ice_slide_dx = 0
             self._ice_slide_dz = 0
-            self._start_ice_slide(sdx, sdz, self._validator)
+            self._start_ice_slide(sdx, sdz, validator)
             return
 
         if self._queued is not None:
@@ -574,7 +589,7 @@ class Cube:
         map_z = round(self.grid_z)
         tile = validator.get_tile_type(map_x, map_z) if validator else "empty"
 
-        if tile != "floor":
+        if not self._is_walkable(tile):
             # Caiu do mapa durante o slide
             self._slide_steps = 0
             self._slide_validator = None
@@ -586,6 +601,13 @@ class Cube:
 
         self._last_valid_grid_x = map_x
         self._last_valid_grid_z = map_z
+
+        if tile == "end":
+            self._reached_end = True
+            self._slide_steps = 0
+            self._slide_validator = None
+            self.state = CubeState.IDLE
+            return
 
         if self._slide_steps <= 0:
             # Slide concluído
@@ -602,7 +624,7 @@ class Cube:
         next_x = map_x + self._slide_dx
         next_z = map_z + self._slide_dz
         next_tile = validator.get_tile_type(next_x, next_z) if validator else "empty"
-        if next_tile != "floor":
+        if not self._is_walkable(next_tile):
             # Para no tile atual — não cai, só encosta na borda
             self._slide_steps = 0
             self._slide_validator = None
