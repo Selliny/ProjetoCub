@@ -74,7 +74,22 @@ CAMERA_FOLLOW_SMOOTHING = 8.0
 
 
 def _build_default_map() -> Map:
-    return Map.generate()
+    return Map.generate(
+        generator="maze",
+        challenge_profile="medium",
+        cols=36,
+        rows=20,
+        branch_count=12,
+        branch_length=9,
+        main_path_bias=0.72,
+        loop_regions=3,
+        reward_branches=3,
+        false_branches=5,
+        false_branch_length=11,
+        risk_shortcuts=2,
+        safe_detours=1,
+        dead_end_ratio=0.35,
+    )
 
 
 def _new_block(col: int, row: int) -> Block:

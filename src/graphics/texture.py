@@ -34,6 +34,11 @@ class TextureManager:
     _cache: dict[str, int] = {}  # chave: caminho relativo original
 
     @classmethod
+    def clear_cache(cls) -> None:
+        """Limpa IDs OpenGL cacheados quando o contexto grafico e recriado."""
+        cls._cache.clear()
+
+    @classmethod
     def load(cls, path: str) -> int:
         """Carrega `path` e retorna o ID OpenGL. Usa cache pelo caminho relativo."""
         if path in cls._cache:

@@ -69,6 +69,18 @@ class Block:
             cls._tex_id = TextureManager.load(cls.TEXTURE_PATH)
         return cls._tex_id
 
+    @classmethod
+    def reset_texture_cache(cls) -> None:
+        """Forca recarregamento de texturas apos recriar o contexto OpenGL."""
+        TextureManager.clear_cache()
+
+        def reset_block_class(block_cls: type[Block]) -> None:
+            block_cls._tex_id = None
+            for sub_cls in block_cls.__subclasses__():
+                reset_block_class(sub_cls)
+
+        reset_block_class(cls)
+
     def _draw_top_textured(self) -> None:
         """Textura opaca no topo — mesmo padrão para todos os blocos texturizados."""
         tex = self._get_tex()
@@ -573,5 +585,4 @@ class CheckpointBlock(PoweredBlock):
         self._draw_top_solid(r, g, b)
         self._draw_sides(r, g, b)
         glPopMatrix()
-
 

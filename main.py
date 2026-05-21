@@ -51,7 +51,8 @@ from OpenGL.GL import (
 from OpenGL.GLU import gluLookAt, gluPerspective
 from pygame.locals import DOUBLEBUF, FULLSCREEN, OPENGL
 
-from sandboxes.menu import run_end_screen, run_menu
+from sandboxes.menu import get_next_difficulty, run_end_screen, run_menu
+from src.entities.block import Block
 from src.entities.cube import Cube, CubeState
 from src.graphics.position import Position
 from src.world.map import Map
@@ -240,6 +241,7 @@ def main() -> None:
     pygame.init()
     pygame.display.set_mode((_SCREEN_W, _SCREEN_H), DOUBLEBUF | OPENGL | FULLSCREEN)
     pygame.display.set_caption(f"Cub Project! [{diff.label}]")
+    Block.reset_texture_cache()
 
     glViewport(0, 0, _SCREEN_W, _SCREEN_H)
     glMatrixMode(GL_PROJECTION)
@@ -254,8 +256,20 @@ def main() -> None:
         return Map.generate(
             cols=diff.cols,
             rows=diff.rows,
+            challenge_profile=diff.challenge_profile,
+            generator=diff.generator,
             n_paths=diff.n_paths,
             arc_noise=diff.arc_noise,
+            branch_count=diff.branch_count,
+            branch_length=diff.branch_length,
+            main_path_bias=diff.main_path_bias,
+            loop_regions=diff.loop_regions,
+            reward_branches=diff.reward_branches,
+            false_branches=diff.false_branches,
+            false_branch_length=diff.false_branch_length,
+            risk_shortcuts=diff.risk_shortcuts,
+            safe_detours=diff.safe_detours,
+            dead_end_ratio=diff.dead_end_ratio,
             prob_heal=diff.prob_heal,
             prob_shrink=diff.prob_shrink,
             prob_grow=diff.prob_grow,
@@ -350,9 +364,45 @@ def main() -> None:
             continue
 
         if c.reached_end and c.state == CubeState.IDLE:
-            pygame.quit()
-            run_end_screen(c.lives, c.max_lives, diff.label)
-            return
+            next_diff = get_next_difficulty(diff)
+            advance = run_end_screen(
+                c.lives,
+                c.max_lives,
+                diff.label,
+                next_diff.label if next_diff is not None else None,
+            )
+            if not advance or next_diff is None:
+                pygame.quit()
+                return
+
+            diff = next_diff
+            pygame.display.set_mode((_SCREEN_W, _SCREEN_H), DOUBLEBUF | OPENGL | FULLSCREEN)
+            pygame.display.set_caption(f"Cub Project! [{diff.label}]")
+            Block.reset_texture_cache()
+
+            glViewport(0, 0, _SCREEN_W, _SCREEN_H)
+            glMatrixMode(GL_PROJECTION)
+            glLoadIdentity()
+            gluPerspective(45, _SCREEN_W / _SCREEN_H, 0.1, 100.0)
+            glMatrixMode(GL_MODELVIEW)
+            glLoadIdentity()
+            glEnable(GL_DEPTH_TEST)
+
+            map_[0] = _new_map()
+            cube[0] = _make_cube(map_[0])
+            last_frame_ms[0] = None
+            last_state[0] = None
+            last_lives[0] = cube[0].lives
+            camera_yaw[0] = 0.0
+            camera_height[0] = 9.0
+            camera_distance[0] = 12.0
+
+            start_col, start_row = map_[0].start
+            camera_eye = pygame.math.Vector3(float(start_col), 9.0, float(start_row) + 12.0)
+            camera_target = pygame.math.Vector3(float(start_col), 0.0, float(start_row))
+
+            print(f"Dificuldade: {diff.label} | Mapa gerado — início em {map_[0].start}")
+            continue
 
         # Input de movimento (respeita inversão de controles)
         keys = pygame.key.get_pressed()

@@ -43,10 +43,22 @@ _FACES = [
 @dataclass
 class DifficultyConfig:
     label: str
+    challenge_profile: str
+    generator: str
     cols: int
     rows: int
     n_paths: int
     arc_noise: float
+    branch_count: int
+    branch_length: int
+    main_path_bias: float
+    loop_regions: int
+    reward_branches: int
+    false_branches: int
+    false_branch_length: int
+    risk_shortcuts: int
+    safe_detours: int
+    dead_end_ratio: float
     prob_heal: float
     prob_shrink: float
     prob_grow: float
@@ -62,50 +74,86 @@ class DifficultyConfig:
 _DIFFICULTIES: list[DifficultyConfig] = [
     DifficultyConfig(
         label="FACIL",
+        challenge_profile="easy",
+        generator="maze",
         cols=24, rows=14,
         n_paths=4,
         arc_noise=0.10,
-        prob_heal=0.06,
-        prob_shrink=0.01,
-        prob_grow=0.005,
-        prob_portal=0.012,
-        prob_ice=0.020,
-        prob_invert=0.008,
-        prob_fragile=0.015,
-        prob_bounce=0.012,
-        prob_slow=0.010,
-        prob_checkpoint=0.018,
+        branch_count=7,
+        branch_length=7,
+        main_path_bias=0.78,
+        loop_regions=2,
+        reward_branches=3,
+        false_branches=2,
+        false_branch_length=5,
+        risk_shortcuts=1,
+        safe_detours=2,
+        dead_end_ratio=0.20,
+        prob_heal=0.040,
+        prob_shrink=0.006,
+        prob_grow=0.006,
+        prob_portal=0.004,
+        prob_ice=0.012,
+        prob_invert=0.004,
+        prob_fragile=0.008,
+        prob_bounce=0.006,
+        prob_slow=0.008,
+        prob_checkpoint=0.020,
     ),
     DifficultyConfig(
         label="MEDIO",
+        challenge_profile="medium",
+        generator="maze",
         cols=36, rows=20,
-        n_paths=4,
+        n_paths=3,
         arc_noise=0.20,
+        branch_count=10,
+        branch_length=11,
+        main_path_bias=0.62,
+        loop_regions=2,
+        reward_branches=2,
+        false_branches=5,
+        false_branch_length=11,
+        risk_shortcuts=1,
+        safe_detours=0,
+        dead_end_ratio=0.48,
         prob_heal=0.005,
-        prob_shrink=0.04,
+        prob_shrink=0.025,
         prob_grow=0.002,
-        prob_portal=0.050,
-        prob_ice=0.030,
-        prob_invert=0.020,
-        prob_fragile=0.030,
-        prob_bounce=0.018,
-        prob_slow=0.015,
+        prob_portal=0.012,
+        prob_ice=0.018,
+        prob_invert=0.014,
+        prob_fragile=0.018,
+        prob_bounce=0.012,
+        prob_slow=0.010,
         prob_checkpoint=0.012,
     ),
     DifficultyConfig(
         label="DIFICIL",
+        challenge_profile="hard",
+        generator="maze",
         cols=56, rows=30,
-        n_paths=4,
+        n_paths=2,
         arc_noise=0.30,
+        branch_count=18,
+        branch_length=18,
+        main_path_bias=0.52,
+        loop_regions=1,
+        reward_branches=1,
+        false_branches=10,
+        false_branch_length=18,
+        risk_shortcuts=1,
+        safe_detours=0,
+        dead_end_ratio=0.68,
         prob_heal=0.001,
-        prob_shrink=0.08,
+        prob_shrink=0.030,
         prob_grow=0.002,
-        prob_portal=0.090,
-        prob_ice=0.040,
-        prob_invert=0.035,
-        prob_fragile=0.050,
-        prob_bounce=0.025,
-        prob_slow=0.020,
+        prob_portal=0.012,
+        prob_ice=0.028,
+        prob_invert=0.025,
+        prob_fragile=0.035,
+        prob_bounce=0.018,
+        prob_slow=0.014,
         prob_checkpoint=0.008,
     ),
 ]
@@ -319,7 +367,24 @@ def run_menu() -> DifficultyConfig | None:
     return None
 
 
-def run_end_screen(lives: int, max_lives: int, label: str | None = None) -> None:
+def get_next_difficulty(current: DifficultyConfig) -> DifficultyConfig | None:
+    try:
+        idx = _DIFFICULTIES.index(current)
+    except ValueError:
+        return None
+    next_idx = idx + 1
+    if next_idx >= len(_DIFFICULTIES):
+        return None
+    return _DIFFICULTIES[next_idx]
+
+
+def run_end_screen(
+    lives: int,
+    max_lives: int,
+    label: str | None = None,
+    next_label: str | None = None,
+) -> bool:
+    """Mostra a tela final. Retorna True quando SPACE pede o próximo nível."""
     pygame.init()
     pygame.font.init()
 
@@ -351,12 +416,12 @@ def run_end_screen(lives: int, max_lives: int, label: str | None = None) -> None
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
-                return
+                return False
             if event.type == pygame.KEYDOWN:
-                if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
-                    pygame.quit()
-                    return
+                if event.key in (pygame.K_ESCAPE, pygame.K_RETURN):
+                    return False
+                if event.key == pygame.K_SPACE and next_label is not None:
+                    return True
 
         screen.fill(_BG)
 
@@ -382,15 +447,21 @@ def run_end_screen(lives: int, max_lives: int, label: str | None = None) -> None
             diff_surf = font_text.render(diff_text, True, _GREEN_DIM)
             screen.blit(diff_surf, (_W // 4 - diff_surf.get_width() // 2, sep_y + 130))
 
-        prompt = "> ENTER PARA SAIR" + ("_" if cursor_visible else " ")
+        if next_label is None:
+            prompt = "> ENTER PARA SAIR" + ("_" if cursor_visible else " ")
+        else:
+            prompt = f"> ENTER PARA SAIR  |  SPACE PARA {next_label}" + ("_" if cursor_visible else " ")
         prompt_surf = font_text.render(prompt, True, _AMBER)
         screen.blit(prompt_surf, (_W // 4 - prompt_surf.get_width() // 2, _H - 120))
 
-        hint_text = "ESC/ENTER para sair"
+        if next_label is None:
+            hint_text = "ESC/ENTER para sair"
+        else:
+            hint_text = f"ESC/ENTER para sair  |  SPACE para nivel {next_label}"
         hint_surf = font_hint.render(hint_text, True, _GREEN_DIM)
         screen.blit(hint_surf, ((_W - hint_surf.get_width()) // 2, _H - 48))
 
         _draw_scanlines(screen)
         pygame.display.flip()
 
-    pygame.quit()
+    return False

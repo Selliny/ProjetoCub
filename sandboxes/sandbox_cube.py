@@ -65,14 +65,20 @@ _SCREEN_H = 1080
 # Legenda de blocos especiais: (cor RGBA, nome exibido)
 _LEGEND_ITEMS: list[tuple[tuple[float, float, float, float], str]] = [
     ((1.0, 0.4, 0.7, 1.0), "Heal"),
-    ((0.5, 0.0, 0.8, 1.0), "Shrink"),
-    ((0.1, 0.5, 1.0, 1.0), "Grow"),
+    ((0.5, 0.0, 1.0, 1.0), "Shrink"),
+    ((0.2, 1.0, 0.2, 1.0), "Grow"),
     ((0.0, 0.1, 0.4, 1.0), "Portal"),
+    ((0.55, 0.88, 1.0, 1.0), "Ice"),
+    ((0.85, 0.0, 0.55, 1.0), "Invert"),
+    ((0.72, 0.72, 0.72, 1.0), "Fragile"),
+    ((1.0, 0.45, 0.0, 1.0), "Bounce"),
+    ((0.2, 0.45, 0.15, 1.0), "Slow"),
+    ((0.85, 0.65, 0.05, 1.0), "Check"),
 ]
 
 _HUD_LEGEND_BOX    = 20   # lado do quadrado colorido em pixels
 _HUD_LEGEND_GAP    = 4    # espaço entre quadrado e texto abaixo
-_HUD_LEGEND_STRIDE = 52   # distância horizontal entre itens
+_HUD_LEGEND_STRIDE = 70   # distância horizontal entre itens
 
 _font: pygame.font.Font | None = None  # inicializado uma vez na primeira chamada
 
@@ -257,10 +263,30 @@ def main() -> None:
         return Map.generate(
             cols=diff.cols,
             rows=diff.rows,
+            challenge_profile=diff.challenge_profile,
+            generator=diff.generator,
+            n_paths=diff.n_paths,
+            arc_noise=diff.arc_noise,
+            branch_count=diff.branch_count,
+            branch_length=diff.branch_length,
+            main_path_bias=diff.main_path_bias,
+            loop_regions=diff.loop_regions,
+            reward_branches=diff.reward_branches,
+            false_branches=diff.false_branches,
+            false_branch_length=diff.false_branch_length,
+            risk_shortcuts=diff.risk_shortcuts,
+            safe_detours=diff.safe_detours,
+            dead_end_ratio=diff.dead_end_ratio,
             prob_heal=diff.prob_heal,
             prob_shrink=diff.prob_shrink,
             prob_grow=diff.prob_grow,
             prob_portal=diff.prob_portal,
+            prob_ice=diff.prob_ice,
+            prob_invert=diff.prob_invert,
+            prob_fragile=diff.prob_fragile,
+            prob_bounce=diff.prob_bounce,
+            prob_slow=diff.prob_slow,
+            prob_checkpoint=diff.prob_checkpoint,
         )
 
     map_: list[Map] = [_new_map()]
@@ -322,6 +348,7 @@ def main() -> None:
         last_frame_ms[0] = now_ms
 
         c = cube[0]
+        map_[0].update(dt)
         c.update(dt)
 
         # Exibe mudança de estado.
@@ -344,7 +371,10 @@ def main() -> None:
         if not c.is_moving():
             for key, direction in CUBE_KEYS.items():
                 if keys[key]:
-                    c.try_roll(*direction, validator=map_[0])
+                    dx, dz = direction
+                    if c.controls_inverted:
+                        dx, dz = -dx, -dz
+                    c.try_roll(dx, dz, validator=map_[0])
                     break
 
         if keys[pygame.K_LEFT]:
