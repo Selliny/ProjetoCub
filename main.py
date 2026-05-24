@@ -73,16 +73,13 @@ _HUD_LEGEND_GAP    = 3
 _HUD_LEGEND_STRIDE = 70
 
 _LEGEND_ITEMS: list[tuple[tuple[float, float, float, float], str]] = [
-    ((1.0, 0.4, 0.7, 1.0),  "Heal"),
-    ((0.5, 0.0, 1.0, 1.0),  "Shrink"),
-    ((0.2, 1.0, 0.2, 1.0),  "Grow"),
-    ((0.0, 0.1, 0.4, 1.0),  "Portal"),
-    ((0.55, 0.88, 1.0, 1.0),"Ice"),
-    ((0.85, 0.0, 0.55, 1.0),"Invert"),
-    ((0.72, 0.72, 0.72, 1.0),"Fragile"),
-    ((1.0, 0.45, 0.0, 1.0), "Bounce"),
-    ((0.2, 0.45, 0.15, 1.0),"Slow"),
-    ((0.85, 0.65, 0.05, 1.0),"Check"),
+    ((1.0, 0.3, 0.7, 1.0),    "Curar"),    # HealBlock    — rosa neon
+    ((0.7, 0.0, 1.0, 1.0),    "Encolher"), # ShrinkBlock  — roxo neon
+    ((0.0, 1.0, 0.4, 1.0),    "Crescer"),  # GrowBlock    — verde neon
+    ((0.0, 0.8, 1.0, 1.0),    "Gelo"),     # IceBlock     — ciano neon
+    ((1.0, 0.0, 0.8, 1.0),    "Inverter"), # InvertBlock  — magenta neon
+    ((0.85, 0.85, 0.85, 1.0), "Fragil"),   # FragileBlock — branco
+    ((1.0, 0.8, 0.0, 1.0),    "Blink"),    # BlinkBlock   — amarelo neon
 ]
 
 _font: pygame.font.Font | None = None
@@ -179,7 +176,7 @@ def _draw_heart(cx: float, cy: float, size: float, filled: bool) -> None:
     glEnd()
 
 
-def _draw_hud(lives: int, max_lives: int) -> None:
+def _draw_hud(lives: int, max_lives: int, active_effects: list | None = None, elapsed_s: float = 0.0) -> None:
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
     glOrtho(0, _SCREEN_W, _SCREEN_H, 0, -1, 1)
@@ -198,6 +195,40 @@ def _draw_hud(lives: int, max_lives: int) -> None:
         _draw_heart(cx, cy, s, filled=(i < lives))
 
     _draw_legend(_HUD_MARGIN + s + 10)
+
+    # Barras de efeitos temporários ativos
+    if active_effects:
+        bar_w = 48
+        bar_h = 7
+        bar_y = _HUD_MARGIN + s + 6
+        for i, eff in enumerate(active_effects):
+            bx = _HUD_MARGIN + i * (bar_w + 6)
+            frac = max(0.0, min(1.0, eff["remaining"] / eff["max"]))
+            # Fundo cinza
+            glColor4f(0.25, 0.25, 0.25, 0.85)
+            glBegin(GL_QUADS)
+            glVertex2f(bx,          bar_y)
+            glVertex2f(bx + bar_w,  bar_y)
+            glVertex2f(bx + bar_w,  bar_y + bar_h)
+            glVertex2f(bx,          bar_y + bar_h)
+            glEnd()
+            # Preenchimento colorido
+            r, g, b, a = eff["color"]
+            glColor4f(r, g, b, a)
+            glBegin(GL_QUADS)
+            glVertex2f(bx,                      bar_y)
+            glVertex2f(bx + bar_w * frac,       bar_y)
+            glVertex2f(bx + bar_w * frac,       bar_y + bar_h)
+            glVertex2f(bx,                      bar_y + bar_h)
+            glEnd()
+            # Rótulo do efeito
+            _draw_text_pixels(eff["name"], int(bx), int(bar_y + bar_h + 2), (220, 220, 220))
+
+    # Timer no canto superior direito
+    total_s = int(elapsed_s)
+    timer_str = f"{total_s // 3600:02d}:{(total_s % 3600) // 60:02d}:{total_s % 60:02d}"
+    tw, th = _get_font().size(timer_str)
+    _draw_text_pixels(timer_str, _SCREEN_W - tw - _HUD_MARGIN, _HUD_MARGIN, (0, 220, 220))
 
     glDisable(GL_BLEND)
     glEnable(GL_DEPTH_TEST)
@@ -273,28 +304,29 @@ def main() -> None:
             prob_heal=diff.prob_heal,
             prob_shrink=diff.prob_shrink,
             prob_grow=diff.prob_grow,
-            prob_portal=diff.prob_portal,
             prob_ice=diff.prob_ice,
             prob_invert=diff.prob_invert,
             prob_fragile=diff.prob_fragile,
-            prob_bounce=diff.prob_bounce,
-            prob_slow=diff.prob_slow,
-            prob_checkpoint=diff.prob_checkpoint,
+            cluster_zones=diff.cluster_zones,
+            combo_sequences=diff.combo_sequences,
+            corridor_theme_count=diff.corridor_theme_count,
         )
 
     map_: list[Map] = [_new_map()]
     cube: list[Cube] = [_make_cube(map_[0])]
+
+    elapsed_s: list[float] = [0.0]   # timer global — não para com mortes
 
     last_frame_ms: list[int | None] = [None]
     last_state: list[CubeState | None] = [None]
     last_lives: list[int] = [Cube.MAX_LIVES]
 
     camera_yaw: list[float]      = [0.0]
-    camera_height: list[float]   = [9.0]
-    camera_distance: list[float] = [12.0]
+    camera_height: list[float]   = [diff.camera_height_default]
+    camera_distance: list[float] = [diff.camera_distance_default]
 
     start_col, start_row = map_[0].start
-    camera_eye    = pygame.math.Vector3(float(start_col), 9.0, float(start_row) + 12.0)
+    camera_eye    = pygame.math.Vector3(float(start_col), diff.camera_height_default, float(start_row) + diff.camera_distance_default)
     camera_target = pygame.math.Vector3(float(start_col), 0.0, float(start_row))
 
     def _clamp_camera() -> None:
@@ -346,8 +378,11 @@ def main() -> None:
             dt = (now_ms - last_frame_ms[0]) / 1000.0
         last_frame_ms[0] = now_ms
 
+        elapsed_s[0] += dt
+
         # Atualiza mapa (FragileBlock timers) e cubo
         map_[0].update(dt)
+        cube[0].check_ground(map_[0])
         c = cube[0]
         c.update(dt)
 
@@ -365,11 +400,14 @@ def main() -> None:
 
         if c.reached_end and c.state == CubeState.IDLE:
             next_diff = get_next_difficulty(diff)
+            total_s = int(elapsed_s[0])
+            elapsed_fmt = f"{total_s // 3600:02d}:{(total_s % 3600) // 60:02d}:{total_s % 60:02d}"
             advance = run_end_screen(
                 c.lives,
                 c.max_lives,
                 diff.label,
                 next_diff.label if next_diff is not None else None,
+                elapsed=elapsed_fmt,
             )
             if not advance or next_diff is None:
                 pygame.quit()
@@ -390,15 +428,16 @@ def main() -> None:
 
             map_[0] = _new_map()
             cube[0] = _make_cube(map_[0])
+            elapsed_s[0] = 0.0
             last_frame_ms[0] = None
             last_state[0] = None
             last_lives[0] = cube[0].lives
             camera_yaw[0] = 0.0
-            camera_height[0] = 9.0
-            camera_distance[0] = 12.0
+            camera_height[0] = diff.camera_height_default
+            camera_distance[0] = diff.camera_distance_default
 
             start_col, start_row = map_[0].start
-            camera_eye = pygame.math.Vector3(float(start_col), 9.0, float(start_row) + 12.0)
+            camera_eye = pygame.math.Vector3(float(start_col), diff.camera_height_default, float(start_row) + diff.camera_distance_default)
             camera_target = pygame.math.Vector3(float(start_col), 0.0, float(start_row))
 
             print(f"Dificuldade: {diff.label} | Mapa gerado — início em {map_[0].start}")
@@ -426,7 +465,7 @@ def main() -> None:
             camera_distance[0] += _CAMERA_DISTANCE_STEP
         if keys[pygame.K_q]:
             camera_height[0] += _CAMERA_HEIGHT_STEP
-        if keys[pygame.K_e]:
+        if keys[pygame.K_z]:
             camera_height[0] -= _CAMERA_HEIGHT_STEP
         _clamp_camera()
 
@@ -443,7 +482,7 @@ def main() -> None:
         camera_eye.update(camera_eye.lerp(desired_eye, blend))
 
         # Render
-        glClearColor(0.2, 0.5, 0.8, 1.0)
+        glClearColor(0.04, 0.04, 0.08, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
 
@@ -456,7 +495,7 @@ def main() -> None:
         map_[0].draw()
         c.apply_transform()
         c.draw()
-        _draw_hud(c.lives, c.max_lives)
+        _draw_hud(c.lives, c.max_lives, c.active_effects, elapsed_s[0])
 
         pygame.display.flip()
         pygame.time.wait(10)
