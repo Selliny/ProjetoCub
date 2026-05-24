@@ -45,12 +45,11 @@ class MovementValidator(Protocol):
 
 
 class CubeState(Enum):
-    IDLE        = "idle"
-    ROLLING     = "rolling"
-    SLIDING     = "sliding"
-    FALLING     = "falling"
-    FADING_OUT  = "fading_out"
-    FADING_IN   = "fading_in"
+    IDLE      = "idle"
+    ROLLING   = "rolling"
+    SLIDING   = "sliding"
+    FALLING   = "falling"
+    FADING_IN = "fading_in"
 
 
 class Cube:
@@ -66,10 +65,8 @@ class Cube:
 
     # Duração dos efeitos temporários
     INVERT_DURATION:     float = 5.0   # segundos de controles invertidos
-    SLOW_MOVES:          int   = 3     # movimentos lentos após SlowBlock
-    SLOW_FACTOR:         float = 2.0   # multiplicador da duração do roll
-    ICE_STEPS:           int   = 3     # passos do deslize de gelo
-    SLIDE_STEP_DURATION: float = 0.12  # duração de cada passo do deslize (s)
+    ICE_STEPS:           int   = 6     # passos do deslize de gelo
+    SLIDE_STEP_DURATION: float = 0.09  # duração de cada passo do deslize (s)
 
     def __init__(
         self,
@@ -113,11 +110,6 @@ class Cube:
         self._total_angle_z: float = 0.0
         self._total_angle_x: float = 0.0
 
-        # Portal
-        self._portal_target_x: int = 0
-        self._portal_target_z: int = 0
-        self._portal_landing_is_void: bool = False
-
         # Ice slide: estado de deslizamento plano
         self._ice_slide_dx: int = 0
         self._ice_slide_dz: int = 0
@@ -131,13 +123,6 @@ class Cube:
 
         # Invert: tempo restante de controles invertidos
         self._invert_timer: float = 0.0
-
-        # Slow: movimentos restantes com roll lento
-        self._slow_moves_left: int = 0
-
-        # Checkpoint: posição do último checkpoint ativado
-        self._checkpoint_x: int | None = None
-        self._checkpoint_z: int | None = None
 
         # Estado de vitória
         self._reached_end: bool = False
@@ -155,8 +140,17 @@ class Cube:
         return self._reached_end
 
     @property
-    def checkpoint_active(self) -> bool:
-        return self._checkpoint_x is not None
+    def active_effects(self) -> list[dict]:
+        """Efeitos temporários ativos com tempo/contagem restante para o HUD."""
+        out = []
+        if self._invert_timer > 0.0:
+            out.append({
+                "name": "INV",
+                "remaining": self._invert_timer,
+                "max": 5.0,
+                "color": (0.85, 0.0, 0.55, 1.0),
+            })
+        return out
 
     def try_roll(
         self,
@@ -174,6 +168,19 @@ class Cube:
 
         if self.state not in (CubeState.IDLE,):
             return False
+
+        # Verificar bloqueios antes de iniciar o roll.
+        # Calcula a célula de destino real (grid_x + dx*step_size) para evitar
+        # bloqueio antecipado quando o cubo está pequeno (step_size=0.5, offset ±0.25).
+        if validator is not None and hasattr(validator, "can_move_to"):
+            dest_x = self.grid_x + dx * self.step_size
+            dest_z = self.grid_z + dz * self.step_size
+            target_x = round(dest_x)
+            target_z = round(dest_z)
+            cube_scale = self.size.sx
+            tile = validator.get_tile_type(target_x, target_z)
+            if tile == "floor" and not validator.can_move_to(target_x, target_z, cube_scale):  # type: ignore[call-arg]
+                return False
 
         self._start_roll(dx, dz, validator)
         return True
@@ -193,8 +200,7 @@ class Cube:
             self._invert_timer = max(0.0, self._invert_timer - dt)
 
         if self.state == CubeState.ROLLING:
-            effective_duration = Cube.ROLL_DURATION * (Cube.SLOW_FACTOR if self._slow_moves_left > 0 else 1.0)
-            self._roll_t = min(self._roll_t + dt / effective_duration, 1.0)
+            self._roll_t = min(self._roll_t + dt / Cube.ROLL_DURATION, 1.0)
             if self._roll_t >= 1.0:
                 self._finish_roll()
             return
@@ -209,13 +215,12 @@ class Cube:
             self._fall_t = min(self._fall_t + dt / Cube.FALL_DURATION, 1.0)
             self._fall_offset_y = -Cube.FALL_DISTANCE * self._fall_t
             if self._fall_t >= 1.0:
-                # Respawn: usa checkpoint se ativo, senão volta ao spawn original
-                if self._checkpoint_x is not None:
-                    self.grid_x = self._checkpoint_x
-                    self.grid_z = self._checkpoint_z  # type: ignore[assignment]
-                else:
-                    self.grid_x = self._last_valid_grid_x
-                    self.grid_z = self._last_valid_grid_z
+                self.grid_x = float(self._last_valid_grid_x)
+                self.grid_z = float(self._last_valid_grid_z)
+                # Re-aplica o offset do cubo encolhido para reaparecer na borda correta
+                if self.step_size == 0.5:
+                    self.grid_x -= 0.25
+                    self.grid_z += 0.25
                 self._sync_position_from_grid()
                 self._total_angle_z = 0.0
                 self._total_angle_x = 0.0
@@ -225,38 +230,14 @@ class Cube:
                 self.state = CubeState.FADING_IN
             return
 
-        if self.state == CubeState.FADING_OUT:
-            self._fade_t += dt / Cube.FADE_DURATION
-            self._alpha = max(0.0, 1.0 - self._fade_t)
-            if self._fade_t >= 1.0:
-                self.grid_x = self._portal_target_x - (0.25 if self.step_size == 0.5 else 0)
-                self.grid_z = self._portal_target_z + (0.25 if self.step_size == 0.5 else 0)
-                self._sync_position_from_grid()
-                self._total_angle_z = 0.0
-                self._total_angle_x = 0.0
-                self._alpha = 0.0
-                self._fade_t = 0.0
-                self._portal_landing_is_void = True
-                if self._validator is not None:
-                    tile = self._validator.get_tile_type(
-                        round(self.grid_x), round(self.grid_z)
-                    )
-                    self._portal_landing_is_void = (not self._is_walkable(tile))
-                self.state = CubeState.FADING_IN
-            return
-
         if self.state == CubeState.FADING_IN:
             self._fade_t += dt / Cube.FADE_DURATION
             self._alpha = min(1.0, self._fade_t)
             if self._fade_t >= 1.0:
                 self._alpha = 1.0
-                if self._portal_landing_is_void:
-                    self._portal_landing_is_void = False
-                    self._start_fall()
-                else:
-                    self._last_valid_grid_x = round(self.grid_x)
-                    self._last_valid_grid_z = round(self.grid_z)
-                    self.state = CubeState.IDLE
+                self._last_valid_grid_x = round(self.grid_x)
+                self._last_valid_grid_z = round(self.grid_z)
+                self.state = CubeState.IDLE
             return
 
     @property
@@ -327,44 +308,50 @@ class Cube:
 
     def draw(self) -> None:
         a = self._alpha
-        if a < 1.0:
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
+        # Faces: roxo escuro, topo levemente mais claro
         glBegin(GL_QUADS)
-        glColor4f(0.5, 0.0, 0.8, a)
-
+        glColor4f(0.18, 0.0, 0.35, a)
+        # frente
         glVertex3f(-0.5, -0.5,  0.5); glVertex3f( 0.5, -0.5,  0.5)
         glVertex3f( 0.5,  0.5,  0.5); glVertex3f(-0.5,  0.5,  0.5)
-
+        # trás
         glVertex3f( 0.5, -0.5, -0.5); glVertex3f(-0.5, -0.5, -0.5)
         glVertex3f(-0.5,  0.5, -0.5); glVertex3f( 0.5,  0.5, -0.5)
-
+        # topo
+        glColor4f(0.30, 0.0, 0.55, a)
         glVertex3f(-0.5,  0.5, -0.5); glVertex3f( 0.5,  0.5, -0.5)
         glVertex3f( 0.5,  0.5,  0.5); glVertex3f(-0.5,  0.5,  0.5)
-
+        # base
+        glColor4f(0.10, 0.0, 0.22, a)
         glVertex3f(-0.5, -0.5,  0.5); glVertex3f( 0.5, -0.5,  0.5)
         glVertex3f( 0.5, -0.5, -0.5); glVertex3f(-0.5, -0.5, -0.5)
-
+        # direita
+        glColor4f(0.14, 0.0, 0.28, a)
         glVertex3f( 0.5, -0.5,  0.5); glVertex3f( 0.5, -0.5, -0.5)
         glVertex3f( 0.5,  0.5, -0.5); glVertex3f( 0.5,  0.5,  0.5)
-
+        # esquerda
         glVertex3f(-0.5, -0.5, -0.5); glVertex3f(-0.5, -0.5,  0.5)
         glVertex3f(-0.5,  0.5,  0.5); glVertex3f(-0.5,  0.5, -0.5)
-
         glEnd()
 
+        # Outline neon magenta (sem glow)
+        glColor4f(1.0, 0.0, 1.0, a)
         glLineWidth(2.0)
         glBegin(GL_LINES)
-        glColor4f(0.0, 0.0, 0.0, a)
+        # topo
         glVertex3f(-0.5,  0.5, -0.5); glVertex3f( 0.5,  0.5, -0.5)
         glVertex3f( 0.5,  0.5, -0.5); glVertex3f( 0.5,  0.5,  0.5)
         glVertex3f( 0.5,  0.5,  0.5); glVertex3f(-0.5,  0.5,  0.5)
         glVertex3f(-0.5,  0.5,  0.5); glVertex3f(-0.5,  0.5, -0.5)
+        # base
         glVertex3f(-0.5, -0.5, -0.5); glVertex3f( 0.5, -0.5, -0.5)
         glVertex3f( 0.5, -0.5, -0.5); glVertex3f( 0.5, -0.5,  0.5)
         glVertex3f( 0.5, -0.5,  0.5); glVertex3f(-0.5, -0.5,  0.5)
         glVertex3f(-0.5, -0.5,  0.5); glVertex3f(-0.5, -0.5, -0.5)
+        # pilares
         glVertex3f(-0.5, -0.5, -0.5); glVertex3f(-0.5,  0.5, -0.5)
         glVertex3f( 0.5, -0.5, -0.5); glVertex3f( 0.5,  0.5, -0.5)
         glVertex3f( 0.5, -0.5,  0.5); glVertex3f( 0.5,  0.5,  0.5)
@@ -372,7 +359,7 @@ class Cube:
         glEnd()
         glLineWidth(1.0)
 
-        if a < 1.0:
+        if a >= 1.0:
             glDisable(GL_BLEND)
 
     # ------------------------------------------------------------------
@@ -436,10 +423,6 @@ class Cube:
         self.state = CubeState.IDLE
         self._sync_position_from_grid()
 
-        # Decrementa contador de slow
-        if self._slow_moves_left > 0:
-            self._slow_moves_left -= 1
-
         validator = self._validator
         if validator is not None:
             map_x = round(self.grid_x)
@@ -467,18 +450,6 @@ class Cube:
                 if hasattr(validator, "consume_power"):
                     validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
 
-            elif power == "portal":
-                if hasattr(validator, "get_random_position"):
-                    tx, tz = validator.get_random_position()  # type: ignore[union-attr]
-                else:
-                    import random as _random
-                    tx = round(self.grid_x) + _random.randint(-5, 5)
-                    tz = round(self.grid_z) + _random.randint(-5, 5)
-                if hasattr(validator, "consume_power"):
-                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
-                self._start_portal(tx, tz)
-                return
-
             # ── Novos poderes ──────────────────────────────────────────
             elif power == "ice":
                 # Guarda direção — slide será iniciado abaixo após tile_enter
@@ -499,47 +470,7 @@ class Cube:
                 if hasattr(validator, "schedule_fragile"):
                     validator.schedule_fragile(map_x, map_z)  # type: ignore[union-attr]
 
-            elif power == "bounce":
-                # Lança 2 casas à frente; para na 1ª se a 2ª for vazia
-                if saved_dx != 0 or saved_dz != 0:
-                    t1x = map_x + saved_dx
-                    t1z = map_z + saved_dz
-                    t2x = map_x + saved_dx * 2
-                    t2z = map_z + saved_dz * 2
-                    has_t2 = (
-                        hasattr(validator, "get_tile_type")
-                        and self._is_walkable(validator.get_tile_type(t2x, t2z))
-                    )
-                    has_t1 = (
-                        hasattr(validator, "get_tile_type")
-                        and self._is_walkable(validator.get_tile_type(t1x, t1z))
-                    )
-                    if has_t2:
-                        target_x, target_z = t2x, t2z
-                    elif has_t1:
-                        target_x, target_z = t1x, t1z
-                    else:
-                        target_x, target_z = t1x, t1z  # vai mesmo e cai
-                    self.grid_x = target_x - (0.25 if self.step_size == 0.5 else 0)
-                    self.grid_z = target_z + (0.25 if self.step_size == 0.5 else 0)
-                    self._sync_position_from_grid()
-                    map_x, map_z = round(self.grid_x), round(self.grid_z)
-                    tile = validator.get_tile_type(map_x, map_z)
-
-            elif power == "slow":
-                self._slow_moves_left = Cube.SLOW_MOVES
-                if hasattr(validator, "consume_power"):
-                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
-
-            elif power == "checkpoint":
-                cx, cz = map_x, map_z
-                # Notifica o Map para atualizar visual do checkpoint anterior
-                if hasattr(validator, "set_checkpoint"):
-                    validator.set_checkpoint(cx, cz)  # type: ignore[union-attr]
-                self._checkpoint_x = cx
-                self._checkpoint_z = cz
-
-            if self._is_walkable(tile):
+            if self._is_walkable(tile) and power not in ("fragile", "blink"):
                 self._last_valid_grid_x = round(self.grid_x)
                 self._last_valid_grid_z = round(self.grid_z)
             self.on_tile_enter(tile)
@@ -578,13 +509,17 @@ class Cube:
 
     def _finish_slide_step(self) -> None:
         """Conclui um passo do deslize de gelo e decide se continua ou para."""
+        dest_x = round(self._slide_from_x + self._slide_dx)
+        dest_z = round(self._slide_from_z + self._slide_dz)
+
+        validator = self._slide_validator
+
         # Snap para o destino do passo concluído
-        self.grid_x = round(self._slide_from_x + self._slide_dx)
-        self.grid_z = round(self._slide_from_z + self._slide_dz)
+        self.grid_x = dest_x
+        self.grid_z = dest_z
         self._sync_position_from_grid()
         self._slide_steps -= 1
 
-        validator = self._slide_validator
         map_x = round(self.grid_x)
         map_z = round(self.grid_z)
         tile = validator.get_tile_type(map_x, map_z) if validator else "empty"
@@ -599,15 +534,36 @@ class Cube:
             self._start_fall()
             return
 
-        self._last_valid_grid_x = map_x
-        self._last_valid_grid_z = map_z
-
         if tile == "end":
+            self._last_valid_grid_x = map_x
+            self._last_valid_grid_z = map_z
             self._reached_end = True
             self._slide_steps = 0
             self._slide_validator = None
             self.state = CubeState.IDLE
             return
+
+        # Atualiza last_valid apenas se o tile não for frágil ou blink (evita respawn em tile perigoso)
+        power = validator.get_power(map_x, map_z) if validator else None
+        if power not in ("fragile", "blink"):
+            self._last_valid_grid_x = map_x
+            self._last_valid_grid_z = map_z
+
+        # Ativar poderes nos tiles passados durante o slide
+        if validator is not None:
+            if power == "invert":
+                if self._invert_timer > 0.0:
+                    self._invert_timer = 0.0
+                else:
+                    self._invert_timer = Cube.INVERT_DURATION
+                if hasattr(validator, "consume_power"):
+                    validator.consume_power(map_x, map_z)  # type: ignore[union-attr]
+            elif power == "fragile":
+                if hasattr(validator, "schedule_fragile"):
+                    validator.schedule_fragile(map_x, map_z)  # type: ignore[union-attr]
+            elif power == "ice":
+                # Chegou em outro bloco de gelo: reinicia o slide com steps cheios
+                self._slide_steps = Cube.ICE_STEPS
 
         if self._slide_steps <= 0:
             # Slide concluído
@@ -650,6 +606,14 @@ class Cube:
         self._apply_accumulated_rotation()
         self._apply_size()
 
+    def check_ground(self, validator: "MovementValidator") -> None:
+        """Se estiver IDLE sobre tile inativo/void, inicia queda."""
+        if self.state != CubeState.IDLE:
+            return
+        tile = validator.get_tile_type(round(self.grid_x), round(self.grid_z))
+        if not self._is_walkable(tile):
+            self._start_fall()
+
     def _start_fall(self) -> None:
         self.lives = max(0, self.lives - 1)
         self.state = CubeState.FALLING
@@ -658,14 +622,6 @@ class Cube:
         self._queued = None
         self._ice_slide_dx = 0
         self._ice_slide_dz = 0
-
-    def _start_portal(self, target_x: int, target_z: int) -> None:
-        self._portal_target_x = target_x
-        self._portal_target_z = target_z
-        self._fade_t = 0.0
-        self._alpha = 1.0
-        self.state = CubeState.FADING_OUT
-        self._queued = None
 
     def _sync_position_from_grid(self) -> None:
         self.position.x = float(self.grid_x) * Cube.TILE_SIZE

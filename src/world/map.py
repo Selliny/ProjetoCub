@@ -34,17 +34,14 @@ from collections import deque
 
 from src.entities.block import (
     Block,
-    BouncePadBlock,
-    CheckpointBlock,
+    BlinkBlock,
     EndBlock,
     FragileBlock,
     GrowBlock,
     HealBlock,
     IceBlock,
     InvertBlock,
-    PortalBlock,
     ShrinkBlock,
-    SlowBlock,
     StartBlock,
 )
 from src.graphics.color import Color
@@ -59,20 +56,14 @@ def _make_powered(power_name: str, pos: "Position") -> Block:
         return ShrinkBlock(position=pos, color=Color(0.5, 0.0, 1.0))
     if power_name == "grow":
         return GrowBlock(position=pos, color=Color(0.2, 1.0, 0.2))
-    if power_name == "portal":
-        return PortalBlock(position=pos, color=Color(0.0, 0.1, 0.4))
     if power_name == "ice":
         return IceBlock(position=pos)
     if power_name == "invert":
         return InvertBlock(position=pos)
     if power_name == "fragile":
         return FragileBlock(position=pos)
-    if power_name == "bounce":
-        return BouncePadBlock(position=pos)
-    if power_name == "slow":
-        return SlowBlock(position=pos)
-    if power_name == "checkpoint":
-        return CheckpointBlock(position=pos)
+    if power_name == "blink":
+        return BlinkBlock(position=pos)
     return HealBlock(position=pos, color=Color(1.0, 0.4, 0.7))
 
 
@@ -88,19 +79,17 @@ class Map:
     }
 
     # Probabilidades de geração de blocos especiais (por célula de caminho, não acumuladas).
-    PROB_HEAL:       float = 0.005
-    PROB_SHRINK:     float = 0.020
-    PROB_GROW:       float = 0.015
-    PROB_PORTAL:     float = 0.010
-    PROB_ICE:        float = 0.030
-    PROB_INVERT:     float = 0.020
-    PROB_FRAGILE:    float = 0.030
-    PROB_BOUNCE:     float = 0.018
-    PROB_SLOW:       float = 0.015
-    PROB_CHECKPOINT: float = 0.012
+    PROB_HEAL:    float = 0.005
+    PROB_SHRINK:  float = 0.020
+    PROB_GROW:    float = 0.015
+    PROB_ICE:     float = 0.030
+    PROB_INVERT:  float = 0.020
+    PROB_FRAGILE: float = 0.030
 
     # Duração do timer de FragileBlock (segundos após o cubo sair)
-    FRAGILE_DELAY: float = 1.5
+    FRAGILE_DELAY: float = 0.45
+    # Tempo para o FragileBlock reaparecer após ser quebrado
+    FRAGILE_RESPAWN_DELAY: float = 10.0
 
     # Parâmetros do gerador Loop Central (Mapa 4).
     DEFAULT_N_PATHS:    int   = 2    # 2=arcos, 3=+corredor interno, 4=+atalho central
@@ -112,8 +101,8 @@ class Map:
         self.direction: tuple[int, int] = (0, 1)
         # FragileBlock: mapeia (col, row) → tempo absoluto de desativação
         self._fragile_timers: dict[tuple[int, int], float] = {}
-        # CheckpointBlock: chave da célula atualmente ativa
-        self._active_checkpoint: tuple[int, int] | None = None
+        # FragileBlock: mapeia (col, row) → tempo absoluto de reaparecimento
+        self._fragile_respawn_timers: dict[tuple[int, int], float] = {}
 
     # ------------------------------------------------------------------
     # API pública — manipulação do grid
@@ -137,10 +126,6 @@ class Map:
     # MovementValidator (protocolo duck-typed usado pelo Cube)
     # ------------------------------------------------------------------
 
-    def can_move_to(self, grid_x: int, grid_z: int) -> bool:
-        block = self._grid.get((grid_x, grid_z))
-        return block is not None and block.active
-
     def get_tile_type(self, grid_x: int, grid_z: int) -> str:
         block = self._grid.get((grid_x, grid_z))
         if block is None or not block.active:
@@ -149,17 +134,17 @@ class Map:
             return "end"
         return "floor"
 
+    def can_move_to(self, grid_x: int, grid_z: int, cube_scale: float = 1.0) -> bool:
+        block = self._grid.get((grid_x, grid_z))
+        if block is None or not block.active:
+            return False
+        return True
+
     def get_power(self, grid_x: int, grid_z: int) -> str | None:
         block = self._grid.get((grid_x, grid_z))
         if block is not None and block.active and block.is_powered:
             return getattr(block, "power", None)
         return None
-
-    def get_random_position(self) -> tuple[int, int]:
-        """Retorna uma posição aleatória do grid (pode ser vazia — o cubo cai)."""
-        keys = list(self._grid.keys())
-        col, row = random.choice(keys)
-        return col, row
 
     def consume_power(self, grid_x: int, grid_z: int) -> None:
         """Converte o PoweredBlock na célula em Block comum, consumindo o poder."""
@@ -179,27 +164,29 @@ class Map:
         if key not in self._fragile_timers:
             self._fragile_timers[key] = time.monotonic() + Map.FRAGILE_DELAY
 
-    def set_checkpoint(self, grid_x: int, grid_z: int) -> None:
-        """Ativa o CheckpointBlock em (grid_x, grid_z) e desativa o anterior."""
-        new_key = (grid_x, grid_z)
-        if self._active_checkpoint is not None and self._active_checkpoint != new_key:
-            old_block = self._grid.get(self._active_checkpoint)
-            if isinstance(old_block, CheckpointBlock):
-                old_block.is_active_checkpoint = False
-        new_block = self._grid.get(new_key)
-        if isinstance(new_block, CheckpointBlock):
-            new_block.is_active_checkpoint = True
-        self._active_checkpoint = new_key
-
     def update(self, dt: float) -> None:
-        """Processa timers de FragileBlocks a cada frame."""
+        """Processa timers de FragileBlocks e ciclos de BlinkBlocks a cada frame."""
         now = time.monotonic()
+
         expired = [key for key, t in self._fragile_timers.items() if now >= t]
         for key in expired:
             del self._fragile_timers[key]
             block = self._grid.get(key)
             if block is not None:
                 block.active = False
+                if key not in self._fragile_respawn_timers:
+                    self._fragile_respawn_timers[key] = now + Map.FRAGILE_RESPAWN_DELAY
+
+        respawned = [key for key, t in self._fragile_respawn_timers.items() if now >= t]
+        for key in respawned:
+            del self._fragile_respawn_timers[key]
+            block = self._grid.get(key)
+            if block is not None:
+                block.active = True
+
+        for block in self._grid.values():
+            if isinstance(block, BlinkBlock):
+                block.toggle_blink(dt)
 
     # ------------------------------------------------------------------
     # Geração procedural
@@ -228,13 +215,18 @@ class Map:
         prob_heal: float = PROB_HEAL,
         prob_shrink: float = PROB_SHRINK,
         prob_grow: float = PROB_GROW,
-        prob_portal: float = PROB_PORTAL,
         prob_ice: float = PROB_ICE,
         prob_invert: float = PROB_INVERT,
         prob_fragile: float = PROB_FRAGILE,
-        prob_bounce: float = PROB_BOUNCE,
-        prob_slow: float = PROB_SLOW,
-        prob_checkpoint: float = PROB_CHECKPOINT,
+        # Ignored (kept for backwards-compatible callers):
+        prob_wall: float = 0.0,
+        prob_portal: float = 0.0,
+        prob_bounce: float = 0.0,
+        prob_slow: float = 0.0,
+        prob_checkpoint: float = 0.0,
+        cluster_zones: list | None = None,
+        combo_sequences: list | None = None,
+        corridor_theme_count: int = 0,
     ) -> "Map":
         """Gera um mapa procedural.
 
@@ -259,6 +251,8 @@ class Map:
         """
         rng = random.Random(seed)
         intents: dict[tuple[int, int], str] = {}
+        forced_intents: set[tuple[int, int]] = set()
+        blink_phases: dict[tuple[int, int], float] = {}
 
         if generator == "maze":
             matrix, start, direction, intents = cls._build_maze_matrix(
@@ -278,17 +272,30 @@ class Map:
             )
         elif generator == "loop":
             matrix, start, direction = cls._build_matrix(cols, rows, rng, n_paths, arc_noise)
+        elif generator == "corridor":
+            matrix, start, direction, intents, forced_intents, blink_phases = cls._build_corridor_matrix(
+                cols=cols, rows=rows, rng=rng,
+                n_corridors=branch_count or 3,
+                corridor_theme_count=corridor_theme_count,
+            )
         else:
             raise ValueError(f"Gerador de mapa desconhecido: {generator!r}")
+
+        if generator != "corridor":
+            cls._remove_dead_ends(matrix, start)
 
         if not cls._has_path(matrix, start):
             raise RuntimeError("Mapa gerado sem caminho válido entre START e END.")
 
         return cls._matrix_to_map(
             matrix, start, direction, rng,
-            prob_heal, prob_shrink, prob_grow, prob_portal,
-            prob_ice, prob_invert, prob_fragile, prob_bounce,
-            prob_slow, prob_checkpoint, intents, challenge_profile,
+            prob_heal, prob_shrink, prob_grow,
+            prob_ice, prob_invert, prob_fragile,
+            intents, challenge_profile,
+            cluster_zones=cluster_zones or [],
+            combo_sequences=combo_sequences or [],
+            forced_intents=forced_intents,
+            blink_phases=blink_phases,
         )
 
     # ------------------------------------------------------------------
@@ -436,6 +443,266 @@ class Map:
         return grid, start_col_row, (1, 0)
 
     @staticmethod
+    def _carve_maze_region(
+        grid: list[list[int]],
+        rng: random.Random,
+        x0: int,
+        x1: int,
+        y0: int,
+        y1: int,
+        start: tuple[int, int],
+        must_reach: list[tuple[int, int]],
+        bias: float = 0.55,
+    ) -> None:
+        """Drunkard Walk confinado em [x0..x1] x [y0..y1].
+
+        Garante que cada tile em `must_reach` e alcancavel a partir de `start`.
+        Para cada target, faz biased random walk dentro do retangulo; se nao
+        atingir, fallback Manhattan dentro dos limites. Tiles carved viram
+        FLOOR (1); celulas fora do retangulo nao sao tocadas.
+        """
+        FLOOR = 1
+        def inside(x: int, z: int) -> bool:
+            return x0 <= x <= x1 and y0 <= z <= y1
+
+        sx, sz = start
+        if inside(sx, sz):
+            grid[sz][sx] = FLOOR
+
+        directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        for target in must_reach:
+            tx, tz = target
+            x, z = sx, sz
+            max_steps = (x1 - x0 + y1 - y0 + 4) * 6
+            for _ in range(max_steps):
+                if (x, z) == (tx, tz):
+                    break
+                preferred: list[tuple[int, int]] = []
+                if tx > x:
+                    preferred.append((1, 0))
+                elif tx < x:
+                    preferred.append((-1, 0))
+                if tz > z:
+                    preferred.append((0, 1))
+                elif tz < z:
+                    preferred.append((0, -1))
+                if preferred and rng.random() < bias:
+                    dx, dz = rng.choice(preferred)
+                else:
+                    dx, dz = rng.choice(directions)
+                nx, nz = x + dx, z + dz
+                if not inside(nx, nz):
+                    continue
+                x, z = nx, nz
+                grid[z][x] = FLOOR
+            # Fallback Manhattan
+            while x != tx:
+                x += 1 if tx > x else -1
+                if inside(x, z):
+                    grid[z][x] = FLOOR
+            while z != tz:
+                z += 1 if tz > z else -1
+                if inside(x, z):
+                    grid[z][x] = FLOOR
+
+    @staticmethod
+    def _build_corridor_matrix(
+        cols: int,
+        rows: int,
+        rng: random.Random,
+        n_corridors: int = 3,
+        corridor_theme_count: int = 0,
+    ) -> tuple[list[list[int]], tuple[int, int], tuple[int, int], dict, set]:
+        """Layout hibrido: maze (esquerda) + corredores tematicos (centro) + maze (direita).
+
+        - Zona esquerda (cols 1..entry_col-1): Drunkard Walk de 1 tile conectando
+          START a cada entrada de corredor.
+        - Zona central (cols entry_col..exit_col): N corredores de largura 2
+          que ondulam verticalmente. Isolados entre si por VOID — o jogador deve
+          atravessar UM corredor inteiro (sem rota alternativa horizontal).
+        - Zona direita (cols exit_col+1..cols-2): Drunkard Walk conectando cada
+          saida de corredor ao END.
+
+        corridor_theme_count primeiros corredores recebem tema (ice, fragile,
+        bounce, slow, invert). O ultimo tematico vira corredor com ShrinkBlocks
+        na entrada.
+
+        Retorna: grid, start, direction, intents, forced_intents, blink_phases
+        forced_intents: set de coordenadas cujo intent deve ser honrado sem
+        checagem de zone (para garantir identidade tematica no corredor inteiro).
+        blink_phases: dict de (col, row) → phase_offset (float 0.0-1.0) para BlinkBlocks.
+        """
+        START, FLOOR, END = 2, 1, 3
+        grid = [[0] * cols for _ in range(rows)]
+        intents: dict[tuple[int, int], str] = {}
+        forced_intents: set[tuple[int, int]] = set()
+        blink_phases: dict[tuple[int, int], float] = {}
+
+        # Limites das zonas
+        entry_col = max(4, cols // 5)
+        exit_col  = min(cols - 5, cols - 1 - cols // 5)
+        if exit_col <= entry_col + 2:
+            exit_col = entry_col + 3
+
+        WAVE_PERIOD = 4  # colunas entre possivel mudanca de altitude
+
+        def fill_undulated(row_a_base: int) -> list[tuple[int, int, int]]:
+            """Preenche corredor ondulado; retorna lista de (col, row_a, row_b)."""
+            col_range = exit_col - entry_col + 1
+            row_a = max(1, min(rows - 3, row_a_base))
+            filled: list[tuple[int, int, int]] = []
+            for i, col in enumerate(range(entry_col, exit_col + 1)):
+                row_b = row_a + 1
+                if row_b >= rows - 1:
+                    break
+                grid[row_a][col] = FLOOR
+                grid[row_b][col] = FLOOR
+                filled.append((col, row_a, row_b))
+                # Decidir mudanca de altitude a cada WAVE_PERIOD cols (nao no fim)
+                if i > 0 and i % WAVE_PERIOD == 0 and i < col_range - WAVE_PERIOD:
+                    shift = rng.choice([-1, 0, 1])
+                    if shift != 0:
+                        new_row_a = row_a + shift
+                        new_row_b = new_row_a + 1
+                        if 1 <= new_row_a and new_row_b <= rows - 2:
+                            # Tile de sobreposicao para manter face-connectivity
+                            overlap = row_b + 1 if shift == 1 else row_a - 1
+                            if 1 <= overlap <= rows - 2:
+                                grid[overlap][col] = FLOOR
+                            row_a = new_row_a
+            return filled
+
+        # Corredores tematicos (zona central): calcular base row por espacamento
+        spacing = max(3, rows // (n_corridors + 1))
+        # corridors_filled: lista de lista de (col, row_a, row_b) por corredor
+        corridors_filled: list[list[tuple[int, int, int]]] = []
+        for i in range(n_corridors):
+            row_a_base = max(1, spacing * (i + 1) - 1)
+            if row_a_base + 1 >= rows - 1:
+                break
+            filled = fill_undulated(row_a_base)
+            if filled:
+                corridors_filled.append(filled)
+
+        # Para conectores de maze, usar row da primeira e ultima coluna do corredor
+        def entry_rows(cf: list[tuple[int, int, int]]) -> tuple[int, int]:
+            _, ra, rb = cf[0]
+            return ra, rb
+
+        def exit_rows(cf: list[tuple[int, int, int]]) -> tuple[int, int]:
+            _, ra, rb = cf[-1]
+            return ra, rb
+
+        # START no canto noroeste; END no canto sudeste
+        start = (1, 1)
+        end   = (cols - 2, rows - 2)
+
+        # Maze esquerdo: conectar START a cada entrada (entry_col-1, row_a/row_b)
+        left_targets: list[tuple[int, int]] = []
+        for cf in corridors_filled:
+            ra, rb = entry_rows(cf)
+            left_targets.append((entry_col - 1, ra))
+            left_targets.append((entry_col - 1, rb))
+        Map._carve_maze_region(
+            grid, rng,
+            x0=1, x1=entry_col - 1,
+            y0=1, y1=rows - 2,
+            start=start, must_reach=left_targets,
+        )
+
+        # Maze direito: conectar END a cada saida (exit_col+1, row_a/row_b)
+        right_targets: list[tuple[int, int]] = []
+        for cf in corridors_filled:
+            ra, rb = exit_rows(cf)
+            right_targets.append((exit_col + 1, ra))
+            right_targets.append((exit_col + 1, rb))
+        Map._carve_maze_region(
+            grid, rng,
+            x0=exit_col + 1, x1=cols - 2,
+            y0=1, y1=rows - 2,
+            start=end, must_reach=right_targets,
+        )
+
+        # Temas via intents (primeiros corridor_theme_count corredores)
+        themes = ["ice", "fragile", "invert"]
+        for i, cf in enumerate(corridors_filled):
+            if i >= corridor_theme_count:
+                break
+            theme = themes[i % len(themes)]
+            if theme == "ice":
+                # Corredor de gelo: largura 2 (row_a e row_b).
+                # 2 blocos de inversão de controles por corredor, em 1/3 e 2/3 do comprimento.
+                n = len(cf)
+                ice_invert_positions = {max(1, n // 3), max(2, 2 * n // 3)}
+                for j, (col, row_a, row_b) in enumerate(cf):
+                    tile_intent = "invert" if j in ice_invert_positions else "ice"
+                    intents[(col, row_a)] = tile_intent
+                    intents[(col, row_b)] = tile_intent
+                    forced_intents.add((col, row_a))
+                    forced_intents.add((col, row_b))
+            elif theme == "fragile":
+                # Corredor frágil: 1 bloco de inversão no meio + 70% chance de shrink em n//3.
+                n = len(cf)
+                fragile_invert_positions = {n // 2}
+                shrink_pos = n // 3
+                use_shrink = rng.random() < 0.70
+                for j, (col, row_a, row_b) in enumerate(cf):
+                    if j == shrink_pos and use_shrink:
+                        tile_intent = "shrink"
+                    elif j in fragile_invert_positions:
+                        tile_intent = "invert"
+                    else:
+                        tile_intent = "fragile"
+                    intents[(col, row_a)] = tile_intent
+                    intents[(col, row_b)] = tile_intent
+                    forced_intents.add((col, row_a))
+                    forced_intents.add((col, row_b))
+            else:
+                for (col, row_a, row_b) in cf:
+                    intents[(col, row_a)] = theme
+                    intents[(col, row_b)] = theme
+                    forced_intents.add((col, row_a))
+                    forced_intents.add((col, row_b))
+
+        # Ultimo corredor tematico vira corredor de BlinkBlocks (desafio de timing)
+        if corridor_theme_count > 0 and corridors_filled:
+            idx = min(corridor_theme_count - 1, len(corridors_filled) - 1)
+            cf = corridors_filled[idx]
+            # Limpar intents anteriores deste corredor
+            for (col, row_a, row_b) in cf:
+                intents.pop((col, row_a), None)
+                intents.pop((col, row_b), None)
+                forced_intents.discard((col, row_a))
+                forced_intents.discard((col, row_b))
+            # Preencher interior com BlinkBlocks em fases escalonadas.
+            # row_a e row_b recebem fases opostas (desfasadas 0.5) — garante que
+            # sempre existe pelo menos um tile ativo por coluna.
+            # Primeira e última colunas ficam livres (entrada/saída do corredor).
+            blink_tiles = cf[1:-1]
+            n_blink = len(blink_tiles)
+            for j, (col, row_a, row_b) in enumerate(blink_tiles):
+                phase_a = (1.0 - j / max(1, n_blink)) % 1.0  # onda da esq→dir (entrada→saída)
+                phase_b = (phase_a + 0.5) % 1.0
+                intents[(col, row_a)] = "blink"
+                intents[(col, row_b)] = "blink"
+                forced_intents.add((col, row_a))
+                forced_intents.add((col, row_b))
+                blink_phases[(col, row_a)] = phase_a
+                blink_phases[(col, row_b)] = phase_b
+            # Conectores (cf[0] e cf[-1]): 20% de chance de shrink ou invert.
+            for (col, row_a, row_b) in (cf[0], cf[-1]):
+                if rng.random() < 0.20:
+                    power = rng.choice(["shrink", "invert"])
+                    intents[(col, row_a)] = power
+                    intents[(col, row_b)] = power
+                    forced_intents.add((col, row_a))
+                    forced_intents.add((col, row_b))
+
+        grid[start[1]][start[0]] = START
+        grid[end[1]][end[0]] = END
+        return grid, start, (1, 0), intents, forced_intents, blink_phases
+
+    @staticmethod
     def _build_maze_matrix(
         cols: int,
         rows: int,
@@ -555,19 +822,19 @@ class Map:
             if not route:
                 return
             if intent == "risk":
-                choices = ("fragile", "ice", "bounce", "slow")
+                choices = ("fragile", "ice", "invert")
                 for cell in route[1:-1: max(1, len(route) // 4)]:
                     if cell not in (start, end):
                         intents[cell] = rng.choice(choices)
             elif intent == "safe":
                 mid = route[len(route) // 2]
                 if mid not in (start, end):
-                    intents[mid] = "checkpoint" if rng.random() < 0.45 else "heal"
+                    intents[mid] = "heal"
             elif intent == "loop":
                 if len(route) > 4:
                     cell = route[len(route) // 2]
                     if cell not in (start, end):
-                        intents[cell] = rng.choice(("slow", "ice", "heal"))
+                        intents[cell] = rng.choice(("ice", "heal"))
 
         def carve_to(x: int, z: int, tx: int, tz: int, route: list[tuple[int, int]]) -> tuple[int, int]:
             while (x, z) != (tx, tz):
@@ -640,7 +907,7 @@ class Map:
             if route:
                 reward = route[-1]
                 if reward not in (start, end):
-                    intents[reward] = rng.choice(("grow", "checkpoint", "slow"))
+                    intents[reward] = rng.choice(("grow", "heal"))
 
         for _ in range(reward_branches):
             carve_reward_branch()
@@ -681,7 +948,7 @@ class Map:
             if len(route) >= 3:
                 tail = route[-1]
                 if tail not in (start, end):
-                    intents[tail] = rng.choice(("slow", "ice", "grow"))
+                    intents[tail] = rng.choice(("ice", "grow"))
 
         for _ in range(false_branches):
             carve_false_branch()
@@ -722,7 +989,7 @@ class Map:
                     last_dir = (dx, dz)
                     moved = True
                     if should_dead_end and (x, z) not in (start, end) and _step == steps - 1:
-                        intents[(x, z)] = rng.choice(("slow", "ice"))
+                        intents[(x, z)] = "ice"
                     break
                 if not moved:
                     break
@@ -730,6 +997,30 @@ class Map:
         grid[sz][sx] = START
         grid[ez][ex] = END
         return grid, start, (1, 0), intents
+
+    @staticmethod
+    def _remove_dead_ends(matrix: list[list[int]], start: tuple[int, int]) -> None:
+        """Remove iterativamente tiles de chão com apenas 1 vizinho walkable (becos)."""
+        if not matrix or not matrix[0]:
+            return
+        rows = len(matrix)
+        cols = len(matrix[0])
+        walkable = {1, 2, 3}
+        changed = True
+        while changed:
+            changed = False
+            for r in range(rows):
+                for c in range(cols):
+                    if matrix[r][c] != 1:  # preserva START(2), END(3) e paredes(0)
+                        continue
+                    neighbors = sum(
+                        1 for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                        if 0 <= c + dc < cols and 0 <= r + dr < rows
+                        and matrix[r + dr][c + dc] in walkable
+                    )
+                    if neighbors <= 1:
+                        matrix[r][c] = 0
+                        changed = True
 
     @staticmethod
     def _has_path(matrix: list[list[int]], start: tuple[int, int]) -> bool:
@@ -796,15 +1087,15 @@ class Map:
         prob_heal: float,
         prob_shrink: float,
         prob_grow: float,
-        prob_portal: float,
         prob_ice: float,
         prob_invert: float,
         prob_fragile: float,
-        prob_bounce: float,
-        prob_slow: float,
-        prob_checkpoint: float,
         intents: dict[tuple[int, int], str] | None = None,
         challenge_profile: str = "medium",
+        cluster_zones: list | None = None,
+        combo_sequences: list | None = None,
+        forced_intents: set[tuple[int, int]] | None = None,
+        blink_phases: dict[tuple[int, int], float] | None = None,
     ) -> "Map":
         """Converte a matriz de inteiros num Map populado com Blocks.
 
@@ -816,15 +1107,17 @@ class Map:
         m.start = start
         m.direction = direction
         intents = intents or {}
+        cluster_zones = cluster_zones or []
+        combo_sequences = combo_sequences or []
         distance_from_start, critical_path = Map._path_analysis(matrix, start)
         cols = len(matrix[0]) if matrix else 0
         rows = len(matrix)
         max_distance = max(distance_from_start.values(), default=1)
         profile = challenge_profile if challenge_profile in {"easy", "medium", "hard"} else "medium"
 
-        danger_powers = {"shrink", "portal", "ice", "invert", "fragile", "bounce", "slow"}
-        critical_dangers = {"portal", "fragile", "bounce"}
-        reward_powers = {"heal", "grow", "checkpoint"}
+        danger_powers = {"shrink", "ice", "invert", "fragile"}
+        critical_dangers = {"fragile"}
+        reward_powers = {"heal", "grow"}
 
         def zone_for(col: int, row: int) -> float:
             return distance_from_start.get((col, row), 0) / max_distance
@@ -832,13 +1125,17 @@ class Map:
         def intent_allowed(name: str, zone: float, is_critical: bool) -> bool:
             if zone < 0.18 and name in danger_powers:
                 return False
-            if zone < 0.28 and name in {"portal", "fragile", "bounce", "invert"}:
-                return False
-            if zone > 0.88 and name in {"portal", "checkpoint"}:
+            if zone < 0.28 and name in {"fragile", "invert"}:
                 return False
             if is_critical and name in critical_dangers:
                 return False
             return True
+
+        def _apply_cluster(name: str, zone: float, w: float) -> float:
+            for zmin, zmax, cname, mult in cluster_zones:
+                if cname == name and zmin <= zone < zmax:
+                    return w * mult
+            return w
 
         def zone_weight(name: str, base: float, zone: float, is_critical: bool) -> float:
             if base <= 0.0:
@@ -848,92 +1145,103 @@ class Map:
 
             if zone < 0.20:
                 multipliers = {
-                    "easy": {"heal": 0.65, "grow": 0.45, "checkpoint": 0.70},
-                    "medium": {"heal": 0.25, "grow": 0.20, "checkpoint": 0.45},
-                    "hard": {"heal": 0.08, "grow": 0.08, "checkpoint": 0.20},
+                    "easy": {"heal": 0.65, "grow": 0.45},
+                    "medium": {"heal": 0.25, "grow": 0.20},
+                    "hard": {"heal": 0.08, "grow": 0.08},
                 }
-                return base * multipliers[profile].get(name, 0.0)
+                return _apply_cluster(name, zone, base * multipliers[profile].get(name, 0.0))
 
             if zone < 0.45:
                 multipliers = {
                     "easy": {
-                        "heal": 1.15, "grow": 1.0, "checkpoint": 1.25,
-                        "ice": 0.45, "slow": 0.35, "shrink": 0.25,
-                        "invert": 0.20, "fragile": 0.20, "bounce": 0.25, "portal": 0.10,
+                        "heal": 1.15, "grow": 1.0,
+                        "ice": 0.45, "shrink": 0.25,
+                        "invert": 0.20, "fragile": 0.20,
                     },
                     "medium": {
-                        "heal": 0.85, "grow": 0.80, "checkpoint": 1.0,
-                        "ice": 0.70, "slow": 0.65, "shrink": 0.60,
-                        "invert": 0.45, "fragile": 0.45, "bounce": 0.50, "portal": 0.25,
+                        "heal": 0.85, "grow": 0.80,
+                        "ice": 0.70, "shrink": 0.60,
+                        "invert": 0.45, "fragile": 0.45,
                     },
                     "hard": {
-                        "heal": 0.35, "grow": 0.55, "checkpoint": 0.75,
-                        "ice": 0.85, "slow": 0.85, "shrink": 0.80,
-                        "invert": 0.70, "fragile": 0.75, "bounce": 0.75, "portal": 0.35,
+                        "heal": 0.35, "grow": 0.55,
+                        "ice": 0.85, "shrink": 0.80,
+                        "invert": 0.70, "fragile": 0.75,
                     },
                 }
-                return base * multipliers[profile].get(name, 1.0)
+                return _apply_cluster(name, zone, base * multipliers[profile].get(name, 1.0))
 
             if zone < 0.75:
                 multipliers = {
                     "easy": {
-                        "heal": 1.0, "grow": 1.0, "checkpoint": 1.0,
-                        "ice": 0.70, "slow": 0.65, "shrink": 0.50,
-                        "invert": 0.45, "fragile": 0.45, "bounce": 0.55, "portal": 0.25,
+                        "heal": 1.0, "grow": 1.0,
+                        "ice": 0.70, "shrink": 0.50,
+                        "invert": 0.45, "fragile": 0.45,
                     },
                     "medium": {
-                        "heal": 0.65, "grow": 0.85, "checkpoint": 0.90,
-                        "ice": 1.0, "slow": 0.95, "shrink": 0.95,
-                        "invert": 0.85, "fragile": 0.85, "bounce": 0.85, "portal": 0.55,
+                        "heal": 0.65, "grow": 0.85,
+                        "ice": 1.0, "shrink": 0.95,
+                        "invert": 0.85, "fragile": 0.85,
                     },
                     "hard": {
-                        "heal": 0.25, "grow": 0.65, "checkpoint": 0.55,
-                        "ice": 1.25, "slow": 1.20, "shrink": 1.15,
-                        "invert": 1.15, "fragile": 1.25, "bounce": 1.10, "portal": 0.65,
+                        "heal": 0.25, "grow": 0.65,
+                        "ice": 1.25, "shrink": 1.15,
+                        "invert": 1.15, "fragile": 1.25,
                     },
                 }
-                return base * multipliers[profile].get(name, 1.0)
+                return _apply_cluster(name, zone, base * multipliers[profile].get(name, 1.0))
 
             multipliers = {
                 "easy": {
-                    "heal": 0.75, "grow": 0.80, "checkpoint": 0.35,
-                    "ice": 0.80, "slow": 0.70, "shrink": 0.60,
-                    "invert": 0.50, "fragile": 0.55, "bounce": 0.55, "portal": 0.15,
+                    "heal": 0.75, "grow": 0.80,
+                    "ice": 0.80, "shrink": 0.60,
+                    "invert": 0.50, "fragile": 0.55,
                 },
                 "medium": {
-                    "heal": 0.45, "grow": 0.70, "checkpoint": 0.25,
-                    "ice": 1.15, "slow": 1.05, "shrink": 1.0,
-                    "invert": 1.0, "fragile": 1.0, "bounce": 0.95, "portal": 0.30,
+                    "heal": 0.45, "grow": 0.70,
+                    "ice": 1.15, "shrink": 1.0,
+                    "invert": 1.0, "fragile": 1.0,
                 },
                 "hard": {
-                    "heal": 0.12, "grow": 0.50, "checkpoint": 0.0,
-                    "ice": 1.45, "slow": 1.35, "shrink": 1.30,
-                    "invert": 1.30, "fragile": 1.55, "bounce": 1.25, "portal": 0.35,
+                    "heal": 0.12, "grow": 0.50,
+                    "ice": 1.45, "shrink": 1.30,
+                    "invert": 1.30, "fragile": 1.55,
                 },
             }
-            return base * multipliers[profile].get(name, 1.0)
+            return _apply_cluster(name, zone, base * multipliers[profile].get(name, 1.0))
 
         # Tabela de (nome, prob) para blocos especiais — ordem importa
         _specials = [
             ("heal",       prob_heal),
             ("shrink",     prob_shrink),
             ("grow",       prob_grow),
-            ("portal",     prob_portal),
             ("ice",        prob_ice),
             ("invert",     prob_invert),
             ("fragile",    prob_fragile),
-            ("bounce",     prob_bounce),
-            ("slow",       prob_slow),
-            ("checkpoint", prob_checkpoint),
         ]
+        # Anti-clustering: controla vizinhança de poderes repetidos
+        _recency: dict[tuple[int, int], dict[str, int]] = {}
+        _COOLDOWN = 3
+
+        def _apply_recency(col: int, row: int, power_name: str) -> None:
+            for nc in range(col - 2, col + 3):
+                for nr in range(row - 2, row + 3):
+                    _recency.setdefault((nc, nr), {})[power_name] = _COOLDOWN
+
         def choose_special(col: int, row: int) -> str | None:
             zone = zone_for(col, row)
             is_critical = (col, row) in critical_path
-            weighted = [
-                (name, zone_weight(name, base, zone, is_critical))
-                for name, base in _specials
-            ]
-            weighted = [(name, weight) for name, weight in weighted if weight > 0.0]
+            nbr = _recency.get((col, row), {})
+            weighted = []
+            for name, base in _specials:
+                w = zone_weight(name, base, zone, is_critical)
+                if w <= 0.0:
+                    continue
+                cd = nbr.get(name, 0)
+                if cd > 0:
+                    w *= (1.0 - 0.7 * cd / _COOLDOWN)
+                if w > 0.0:
+                    weighted.append((name, w))
             total = sum(weight for _, weight in weighted)
             if total <= 0.0 or rng.random() >= min(total, 0.42):
                 return None
@@ -954,12 +1262,20 @@ class Map:
                     intent = intents.get((col_idx, row_idx))
                     zone = zone_for(col_idx, row_idx)
                     is_critical = (col_idx, row_idx) in critical_path
-                    if intent is not None and intent_allowed(intent, zone, is_critical):
-                        block = _make_powered(intent, pos)
+                    coord = (col_idx, row_idx)
+                    is_forced = forced_intents is not None and coord in forced_intents
+                    if intent is not None and (is_forced or intent_allowed(intent, zone, is_critical)):
+                        if intent == "blink" and blink_phases:
+                            phase = blink_phases.get(coord, 0.0)
+                            block = BlinkBlock(phase_offset=phase, position=pos)
+                        else:
+                            block = _make_powered(intent, pos)
+                        _apply_recency(col_idx, row_idx, intent)
                     else:
                         special = choose_special(col_idx, row_idx)
                         if special is not None:
                             block = _make_powered(special, pos)
+                            _apply_recency(col_idx, row_idx, special)
                     if block is None:
                         c = Map.CELL_COLORS[1]
                         block = Block(position=pos, color=Color(c.r, c.g, c.b))
@@ -972,5 +1288,30 @@ class Map:
                     continue
 
                 m.add_block(block, col=col_idx, row=row_idx)
+
+        # Inserir combo_sequences no caminho crítico
+        if combo_sequences and distance_from_start:
+            cp_sorted = sorted(critical_path, key=lambda pos: distance_from_start.get(pos, 0))
+            for seq in combo_sequences:
+                n = len(seq)
+                if n == 0:
+                    continue
+                placed = False
+                for i in range(len(cp_sorted) - n):
+                    segment = cp_sorted[i:i + n]
+                    z_start = zone_for(*segment[0])
+                    z_end   = zone_for(*segment[-1])
+                    if z_start < 0.28 or z_end > 0.88:
+                        continue
+                    # Verificar que todos os tiles são floor sem poder existente
+                    if all(
+                        m._grid.get(p) is not None and not m._grid[p].is_powered
+                        for p in segment
+                    ):
+                        for p, pname in zip(segment, seq):
+                            new_pos = Position(x=float(p[0]), y=0.0, z=float(p[1]))
+                            m._grid[p] = _make_powered(pname, new_pos)
+                        placed = True
+                        break
 
         return m
