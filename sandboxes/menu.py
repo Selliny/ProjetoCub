@@ -361,24 +361,32 @@ def run_menu() -> DifficultyConfig | None:
     glViewport(0, 0, _W, _H)
     clock = pygame.time.Clock()
 
-    font_title  = pygame.font.SysFont("couriernew", 88, bold=True)
-    font_option = pygame.font.SysFont("couriernew", 42, bold=True)
-    font_desc   = pygame.font.SysFont("couriernew", 20)
-    font_footer = pygame.font.SysFont("couriernew", 20)
-    font_label  = pygame.font.SysFont("couriernew", 18)
+    font_title  = pygame.font.SysFont("couriernew", 72, bold=True)
+    font_option = pygame.font.SysFont("couriernew", 30, bold=True)
+    font_desc   = pygame.font.SysFont("couriernew", 17)
+    font_label  = pygame.font.SysFont("couriernew", 16)
+    font_credit = pygame.font.SysFont("couriernew", 22)
+
+    _CREDIT_LINES = [
+        ("cyan", "Projeto Cub  ·  Eng. da Computacao"),
+        ("hi",   "Prof. Bruno Aguilar da Cunha"),
+        ("dim",  ""),
+        ("dim",  "Leonardo Canalez  ·  Lucas Madureira Santiago"),
+        ("dim",  "Nicolas Ferrari  ·  Rafael Santos  ·  Selliny Sampaio"),
+    ]
 
     # Zonas de layout (frações da altura da tela)
-    TITLE_Y     = int(_H * 0.07)
-    SEP1_Y      = int(_H * 0.42)
-    OPTIONS_TOP = int(_H * 0.47)
-    OPT_SPACING = int(_H * 0.115)
-    SEP2_Y      = int(_H * 0.82)
-    FOOTER_Y    = int(_H * 0.86)
+    TITLE_Y     = int(_H * 0.04)
+    CREDIT_Y    = int(_H * 0.15)
+    CREDIT_STEP = int(_H * 0.055)
+    SEP1_Y      = int(_H * 0.40)
+    OPTIONS_TOP = int(_H * 0.45)
+    OPT_SPACING = int(_H * 0.14)
 
-    # Cubo 3D: posição fixa em coordenadas de espaço de visão (z=-8)
-    CUBE_CX = 2.2
-    CUBE_CY = 0.6
-    CUBE_SC = 1.1
+    # Cubo 3D: menor e mais alto
+    CUBE_CX = 1.8
+    CUBE_CY = 1.2
+    CUBE_SC = 0.7
 
     option_labels = [f"[ {d.label} ]" for d in _DIFFICULTIES]
     block_h = font_option.get_height() + 4 + font_desc.get_height()
@@ -440,6 +448,20 @@ def run_menu() -> DifficultyConfig | None:
         # Zona topo: título
         _gl_text(font_title, "Cub Project!", 60, TITLE_Y, *_GREEN_HI[:3])
 
+        # Bloco de créditos do projeto (topo esquerdo, abaixo do título)
+        cy = CREDIT_Y
+        for color_key, line in _CREDIT_LINES:
+            if not line:
+                cy += CREDIT_STEP // 2
+                continue
+            if color_key == "cyan":
+                _gl_text(font_credit, line, 60, cy, *_CYAN[:3])
+            elif color_key == "hi":
+                _gl_text(font_credit, line, 60, cy, *_GREEN_HI[:3])
+            else:
+                _gl_text(font_credit, line, 60, cy, 0.75, 0.75, 0.75)
+            cy += CREDIT_STEP
+
         # Separador 1 (cyan neon)
         _gl_line(40, SEP1_Y, _W - 40, SEP1_Y, *_CYAN[:3], 0.35, lw=1.0)
 
@@ -452,31 +474,17 @@ def run_menu() -> DifficultyConfig | None:
             ry = OPTIONS_TOP + i * OPT_SPACING
 
             if is_sel:
-                # Fundo do bloco selecionado
                 _gl_rect(50, ry - 6, _W // 2 - 60, block_h + 12, 0.10, 0.08, 0.01, 0.92)
                 _gl_rect_outline(50, ry - 6, _W // 2 - 60, block_h + 12, *_AMBER[:3], 0.9, lw=1.5)
                 _gl_rect_outline(47, ry - 9, _W // 2 - 54, block_h + 18, *_AMBER[:3], 0.20, lw=1.0)
 
-            # Indicador de seleção
             prefix_text = "> " if is_sel else "  "
             cr, cg, cb, _ = _AMBER if is_sel else _GREEN
             cursor = ("_" if cursor_visible else " ") if is_sel else ""
             name_text = f"{prefix_text}{label}{cursor}"
             _gl_text(font_option, name_text, 60, ry, cr, cg, cb)
 
-            # Descrição abaixo do nome
             _gl_text(font_desc, f"   {desc}", 60, ry + font_option.get_height() + 4, 0.85, 0.85, 0.85)
-
-        # Separador 2
-        _gl_line(40, SEP2_Y, _W - 40, SEP2_Y, *_CYAN[:3], 0.35, lw=1.0)
-
-        # Rodapé: instruções compactas em 2 linhas
-        _gl_text(font_footer,
-                 "WASD: mover o cubo   |   SETAS + MOUSE: camera   |   G: novo mapa   |   Q/E: altura",
-                 60, FOOTER_Y, 0.85, 0.85, 0.85)
-        _gl_text(font_footer,
-                 "ENTER / CLIQUE para confirmar   |   W/S ou SETAS para navegar   |   ESC para sair",
-                 60, FOOTER_Y + font_footer.get_height() + 6, 0.85, 0.85, 0.85)
 
         _gl_scanlines()
         pygame.display.flip()
