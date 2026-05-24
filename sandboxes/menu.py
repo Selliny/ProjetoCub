@@ -1,43 +1,67 @@
-"""Tela inicial com seleção de dificuldade — estética de terminal retrô.
+"""Tela inicial com seleção de dificuldade — renderizada em OpenGL (neon cyberpunk).
 
-Roda em pygame 2D puro (sem OpenGL) e retorna a DifficultyConfig escolhida,
+Roda na mesma janela OpenGL do jogo e retorna a DifficultyConfig escolhida,
 ou None se o jogador fechar a janela.
 """
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pygame
+from pygame.locals import DOUBLEBUF, FULLSCREEN, OPENGL
+from OpenGL.GL import (
+    GL_BLEND,
+    GL_COLOR_BUFFER_BIT,
+    GL_DEPTH_BUFFER_BIT,
+    GL_DEPTH_TEST,
+    GL_LINE_LOOP,
+    GL_LINES,
+    GL_MODELVIEW,
+    GL_ONE_MINUS_SRC_ALPHA,
+    GL_PROJECTION,
+    GL_QUADS,
+    GL_RGBA,
+    GL_SRC_ALPHA,
+    GL_TRIANGLES,
+    GL_UNSIGNED_BYTE,
+    glBegin,
+    glBlendFunc,
+    glClear,
+    glClearColor,
+    glColor4f,
+    glDisable,
+    glDrawPixels,
+    glEnable,
+    glEnd,
+    glLineWidth,
+    glLoadIdentity,
+    glMatrixMode,
+    glOrtho,
+    glPopMatrix,
+    glPushMatrix,
+    glRasterPos2f,
+    glRotatef,
+    glScalef,
+    glTranslatef,
+    glVertex2f,
+    glVertex3f,
+    glViewport,
+)
+from OpenGL.GLU import gluPerspective
 
 pygame.init()
 _info = pygame.display.Info()
 _W, _H = _info.current_w, _info.current_h
 pygame.quit()
 
-# Paleta terminal verde-fósforo
-_BG       = (  4,  10,   4)   # preto quase puro
-_GREEN    = ( 40, 220,  40)   # verde fósforo principal
-_GREEN_DIM= ( 20, 100,  20)   # verde escuro para detalhes
-_GREEN_HI = (140, 255, 140)   # destaque claro
-_AMBER    = (220, 180,  40)   # âmbar para seleção
-_SCANLINE = (  0,   0,   0, 80)  # overlay das scanlines
-
-# Cubo 3D: vértices de um cubo unitário centrado na origem
-_VERTS = [
-    (-1, -1, -1), ( 1, -1, -1), ( 1,  1, -1), (-1,  1, -1),  # face traseira
-    (-1, -1,  1), ( 1, -1,  1), ( 1,  1,  1), (-1,  1,  1),  # face frontal
-]
-_EDGES = [
-    (0,1),(1,2),(2,3),(3,0),  # traseira
-    (4,5),(5,6),(6,7),(7,4),  # frontal
-    (0,4),(1,5),(2,6),(3,7),  # laterais
-]
-_FACES = [
-    (0,1,2,3), (4,5,6,7), (0,1,5,4),
-    (2,3,7,6), (0,3,7,4), (1,2,6,5),
-]
+# Paleta neon / dark cyberpunk (compatível com verde fósforo do terminal)
+_BG       = (0.04, 0.04, 0.08, 1.0)
+_GREEN    = (0.16, 0.86, 0.16, 1.0)
+_GREEN_DIM= (0.08, 0.39, 0.08, 1.0)
+_GREEN_HI = (0.55, 1.00, 0.55, 1.0)
+_AMBER    = (0.86, 0.71, 0.16, 1.0)
+_CYAN     = (0.00, 1.00, 1.00, 1.0)
 
 
 @dataclass
@@ -62,228 +86,320 @@ class DifficultyConfig:
     prob_heal: float
     prob_shrink: float
     prob_grow: float
-    prob_portal: float
     prob_ice: float
     prob_invert: float
     prob_fragile: float
-    prob_bounce: float
-    prob_slow: float
-    prob_checkpoint: float
+    camera_distance_default: float = 12.0
+    camera_height_default: float = 9.0
+    cluster_zones: list = field(default_factory=list)
+    combo_sequences: list = field(default_factory=list)
+    corridor_theme_count: int = 0
 
 
 _DIFFICULTIES: list[DifficultyConfig] = [
     DifficultyConfig(
         label="FACIL",
         challenge_profile="easy",
-        generator="maze",
-        cols=24, rows=14,
+        generator="corridor",
+        cols=48, rows=22,
         n_paths=4,
         arc_noise=0.10,
-        branch_count=7,
-        branch_length=7,
-        main_path_bias=0.78,
-        loop_regions=2,
+        branch_count=2,
+        branch_length=8,
+        main_path_bias=0.72,
+        loop_regions=4,
         reward_branches=3,
-        false_branches=2,
+        false_branches=0,
         false_branch_length=5,
         risk_shortcuts=1,
-        safe_detours=2,
-        dead_end_ratio=0.20,
-        prob_heal=0.040,
+        safe_detours=3,
+        dead_end_ratio=0.0,
+        prob_heal=0.035,
         prob_shrink=0.006,
         prob_grow=0.006,
-        prob_portal=0.004,
         prob_ice=0.012,
         prob_invert=0.004,
         prob_fragile=0.008,
-        prob_bounce=0.006,
-        prob_slow=0.008,
-        prob_checkpoint=0.020,
+        camera_distance_default=14.0,
+        camera_height_default=10.0,
+        cluster_zones=[],
+        combo_sequences=[],
+        corridor_theme_count=2,
     ),
     DifficultyConfig(
         label="MEDIO",
         challenge_profile="medium",
-        generator="maze",
-        cols=36, rows=20,
+        generator="corridor",
+        cols=52, rows=28,
         n_paths=3,
         arc_noise=0.20,
-        branch_count=10,
+        branch_count=3,
         branch_length=11,
         main_path_bias=0.62,
-        loop_regions=2,
-        reward_branches=2,
-        false_branches=5,
+        loop_regions=5,
+        reward_branches=3,
+        false_branches=0,
         false_branch_length=11,
-        risk_shortcuts=1,
-        safe_detours=0,
-        dead_end_ratio=0.48,
+        risk_shortcuts=2,
+        safe_detours=1,
+        dead_end_ratio=0.0,
         prob_heal=0.005,
-        prob_shrink=0.025,
-        prob_grow=0.002,
-        prob_portal=0.012,
+        prob_shrink=0.020,
+        prob_grow=0.006,
         prob_ice=0.018,
         prob_invert=0.014,
         prob_fragile=0.018,
-        prob_bounce=0.012,
-        prob_slow=0.010,
-        prob_checkpoint=0.012,
+        camera_distance_default=10.0,
+        camera_height_default=7.0,
+        cluster_zones=[(0.40, 0.65, "ice", 1.8)],
+        combo_sequences=[["ice", "fragile"]],
+        corridor_theme_count=3,
     ),
     DifficultyConfig(
         label="DIFICIL",
         challenge_profile="hard",
-        generator="maze",
-        cols=56, rows=30,
+        generator="corridor",
+        cols=60, rows=32,
         n_paths=2,
         arc_noise=0.30,
-        branch_count=18,
-        branch_length=18,
-        main_path_bias=0.52,
-        loop_regions=1,
-        reward_branches=1,
-        false_branches=10,
-        false_branch_length=18,
-        risk_shortcuts=1,
+        branch_count=3,
+        branch_length=16,
+        main_path_bias=0.55,
+        loop_regions=6,
+        reward_branches=2,
+        false_branches=0,
+        false_branch_length=14,
+        risk_shortcuts=3,
         safe_detours=0,
-        dead_end_ratio=0.68,
-        prob_heal=0.001,
-        prob_shrink=0.030,
-        prob_grow=0.002,
-        prob_portal=0.012,
+        dead_end_ratio=0.0,
+        prob_heal=0.004,
+        prob_shrink=0.018,
+        prob_grow=0.010,
         prob_ice=0.028,
         prob_invert=0.025,
         prob_fragile=0.035,
-        prob_bounce=0.018,
-        prob_slow=0.014,
-        prob_checkpoint=0.008,
+        camera_distance_default=8.0,
+        camera_height_default=5.0,
+        cluster_zones=[
+            (0.55, 0.75, "ice",     2.5),
+            (0.75, 0.90, "fragile", 2.0),
+            (0.30, 0.50, "bounce",  1.8),
+        ],
+        combo_sequences=[
+            ["ice", "fragile"],
+            ["invert", "fragile"],
+        ],
+        corridor_theme_count=3,
     ),
 ]
 
 
-def _project(vx: float, vy: float, vz: float, fov: float, cx: float, cy: float, scale: float) -> tuple[float, float]:
-    z = vz + fov
-    if z == 0:
-        z = 0.001
-    sx = cx + (vx / z) * scale
-    sy = cy - (vy / z) * scale
-    return sx, sy
+# ── Helpers de renderização OpenGL 2D ────────────────────────────────────────
+
+def _set_2d() -> None:
+    """Muda para projeção ortográfica 2D (Y cresce para baixo)."""
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    glOrtho(0, _W, _H, 0, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+    glDisable(GL_DEPTH_TEST)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
 
-def _rotate(vx: float, vy: float, vz: float, ax: float, ay: float) -> tuple[float, float, float]:
-    # rotação em Y
-    cos_y, sin_y = math.cos(ay), math.sin(ay)
-    vx2 = vx * cos_y + vz * sin_y
-    vz2 = -vx * sin_y + vz * cos_y
-    # rotação em X
-    cos_x, sin_x = math.cos(ax), math.sin(ax)
-    vy2 = vy * cos_x - vz2 * sin_x
-    vz3 = vy * sin_x + vz2 * cos_x
-    return vx2, vy2, vz3
+def _set_3d() -> None:
+    """Restaura projeção perspectiva 3D."""
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    gluPerspective(45.0, _W / _H, 0.1, 100.0)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+    glEnable(GL_DEPTH_TEST)
 
 
-def _draw_cube(surf: pygame.Surface, angle: float, cx: float, cy: float, size: float) -> None:
-    ax = angle * 0.7   # rotação diagonal
-    ay = angle
-
-    fov = 5.0
-    projected = [_project(*_rotate(vx, vy, vz, ax, ay), fov, cx, cy, size)
-                 for vx, vy, vz in _VERTS]
-
-    # faces preenchidas (cor roxa semi-transparente)
-    face_surf = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
-    for face in _FACES:
-        pts = [projected[i] for i in face]
-        # cull back-faces simples pela área com sinal
-        ax_ = pts[1][0] - pts[0][0]; ay_ = pts[1][1] - pts[0][1]
-        bx_ = pts[2][0] - pts[0][0]; by_ = pts[2][1] - pts[0][1]
-        if ax_ * by_ - ay_ * bx_ > 0:
-            pygame.draw.polygon(face_surf, (100, 0, 180, 90), pts)
-            pygame.draw.polygon(face_surf, (140, 60, 220, 160), pts, 1)
-    surf.blit(face_surf, (0, 0))
-
-    # arestas
-    for a, b in _EDGES:
-        pygame.draw.line(surf, (160, 80, 255), (int(projected[a][0]), int(projected[a][1])),
-                         (int(projected[b][0]), int(projected[b][1])), 2)
+def _gl_rect(x: float, y: float, w: float, h: float, r: float, g: float, b: float, a: float) -> None:
+    glColor4f(r, g, b, a)
+    glBegin(GL_QUADS)
+    glVertex2f(x,     y    )
+    glVertex2f(x + w, y    )
+    glVertex2f(x + w, y + h)
+    glVertex2f(x,     y + h)
+    glEnd()
 
 
-def _draw_scanlines(surf: pygame.Surface) -> None:
-    """Overlay de linhas horizontais para efeito CRT."""
-    overlay = pygame.Surface((_W, _H), pygame.SRCALPHA)
-    for y in range(0, _H, 3):
-        pygame.draw.line(overlay, (0, 0, 0, 55), (0, y), (_W, y))
-    surf.blit(overlay, (0, 0))
+def _gl_rect_outline(x: float, y: float, w: float, h: float, r: float, g: float, b: float, a: float, lw: float = 1.0) -> None:
+    glColor4f(r, g, b, a)
+    glLineWidth(lw)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(x,     y    )
+    glVertex2f(x + w, y    )
+    glVertex2f(x + w, y + h)
+    glVertex2f(x,     y + h)
+    glEnd()
+    glLineWidth(1.0)
 
 
-def _draw_border(surf: pygame.Surface, font_small: pygame.font.Font) -> None:
-    """Borda de caracteres ASCII ao redor da tela."""
-    pygame.draw.rect(surf, _GREEN_DIM, (8, 8, _W - 16, _H - 16), 1)
-    pygame.draw.rect(surf, _GREEN_DIM, (12, 12, _W - 24, _H - 24), 1)
-    # cantos decorativos
-    for corner_text, pos in [
-        ("╔", (16, 16)), ("╗", (_W - 36, 16)),
-        ("╚", (16, _H - 36)), ("╝", (_W - 36, _H - 36)),
-    ]:
-        s = font_small.render(corner_text, True, _GREEN_DIM)
-        surf.blit(s, pos)
+def _gl_line(x1: float, y1: float, x2: float, y2: float, r: float, g: float, b: float, a: float, lw: float = 1.0) -> None:
+    glColor4f(r, g, b, a)
+    glLineWidth(lw)
+    glBegin(GL_LINES)
+    glVertex2f(x1, y1); glVertex2f(x2, y2)
+    glEnd()
+    glLineWidth(1.0)
+
+
+def _gl_text(font: pygame.font.Font, text: str, x: float, y: float, r: float, g: float, b: float) -> None:
+    """Renderiza texto. y=0 é o topo da tela (glOrtho com Y crescendo para baixo).
+
+    glDrawPixels ancora no canto inferior-esquerdo e sobe. Como nosso ortho tem Y↓,
+    o 'inferior' no espaço de projeção é y+h (maior valor de Y). Além disso,
+    glDrawPixels lê pixels da base para o topo, enquanto pygame armazena de cima
+    para baixo — então usamos flip vertical para corrigir.
+    """
+    surf = font.render(text, True, (int(r * 255), int(g * 255), int(b * 255)))
+    surf = pygame.transform.flip(surf, False, True)
+    data = pygame.image.tostring(surf, "RGBA", False)
+    w, h = surf.get_size()
+    glRasterPos2f(int(x), int(y) + h)
+    glDrawPixels(w, h, GL_RGBA, GL_UNSIGNED_BYTE, data)
+
+
+def _gl_scanlines() -> None:
+    """Overlay de scanlines CRT (linhas horizontais semitransparentes)."""
+    glColor4f(0.0, 0.0, 0.0, 0.12)
+    glBegin(GL_LINES)
+    y = 0.0
+    while y < _H:
+        glVertex2f(0, y); glVertex2f(_W, y)
+        y += 3.0
+    glEnd()
+
+
+def _gl_border() -> None:
+    """Borda dupla neon no perímetro da tela."""
+    _gl_rect_outline(8, 8, _W - 16, _H - 16, *_GREEN_DIM, lw=1.0)
+    _gl_rect_outline(13, 13, _W - 26, _H - 26, *_GREEN_DIM, lw=1.0)
+
+
+# ── Cubo 3D animado (renderizado via OpenGL real) ────────────────────────────
+
+_CUBE_FACES = [
+    # (normal_brighness, v0..v3)  — cada face tem cor levemente diferente
+    (1.00, [(-1,-1,-1),( 1,-1,-1),( 1, 1,-1),(-1, 1,-1)]),  # trás
+    (0.85, [(-1,-1, 1),( 1,-1, 1),( 1, 1, 1),(-1, 1, 1)]),  # frente
+    (1.10, [(-1, 1,-1),( 1, 1,-1),( 1, 1, 1),(-1, 1, 1)]),  # topo
+    (0.60, [(-1,-1,-1),( 1,-1,-1),( 1,-1, 1),(-1,-1, 1)]),  # base
+    (0.75, [( 1,-1,-1),( 1,-1, 1),( 1, 1, 1),( 1, 1,-1)]),  # direita
+    (0.70, [(-1,-1, 1),(-1,-1,-1),(-1, 1,-1),(-1, 1, 1)]),  # esquerda
+]
+
+_CUBE_EDGES = [
+    (0,1),(1,2),(2,3),(3,0),
+    (4,5),(5,6),(6,7),(7,4),
+    (0,4),(1,5),(2,6),(3,7),
+]
+
+_CUBE_VERTS_RAW = [
+    (-1,-1,-1),( 1,-1,-1),( 1, 1,-1),(-1, 1,-1),
+    (-1,-1, 1),( 1,-1, 1),( 1, 1, 1),(-1, 1, 1),
+]
+
+
+def _draw_3d_cube(angle: float, cx: float, cy: float, scale: float) -> None:
+    """Desenha cubo 3D real no ponto (cx, cy) da viewport usando OpenGL 3D."""
+    _set_3d()
+    glLoadIdentity()
+    glTranslatef(cx, cy, -8.0)
+    glScalef(scale, scale, scale)
+    glRotatef(angle * 50.0, 0.3, 1.0, 0.1)
+
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    # Faces roxo escuro
+    glBegin(GL_QUADS)
+    for brightness, verts in _CUBE_FACES:
+        b = min(brightness, 1.3)
+        glColor4f(0.18 * b, 0.0, 0.35 * b, 0.85)
+        for vx, vy, vz in verts:
+            glVertex3f(vx, vy, vz)
+    glEnd()
+
+    # Outline magenta neon + glow
+    for delta, alpha, lw in ((0.0, 1.0, 2.0), (0.04, 0.35, 1.5), (0.09, 0.12, 1.0)):
+        s = 1.0 + delta
+        glColor4f(1.0, 0.0, 1.0, alpha)
+        glLineWidth(lw)
+        glBegin(GL_LINES)
+        for i, j in _CUBE_EDGES:
+            vx, vy, vz = _CUBE_VERTS_RAW[i]
+            glVertex3f(vx * s, vy * s, vz * s)
+            vx, vy, vz = _CUBE_VERTS_RAW[j]
+            glVertex3f(vx * s, vy * s, vz * s)
+        glEnd()
+    glLineWidth(1.0)
+
+    glDisable(GL_BLEND)
+
+
+# ── Loop do menu ──────────────────────────────────────────────────────────────
+
+_DIFF_DESCRIPTIONS = [
+    "Poucos obstaculos e mais espaco para errar",
+    "Equilibrio entre risco e recompensa",
+    "Gelo, fragil e inversao combinados",
+]
 
 
 def run_menu() -> DifficultyConfig | None:
     pygame.init()
     pygame.font.init()
 
-    screen = pygame.display.set_mode((_W, _H), pygame.FULLSCREEN)
+    pygame.display.set_mode((_W, _H), DOUBLEBUF | OPENGL | FULLSCREEN)
     pygame.display.set_caption("Cub Project!")
+    glViewport(0, 0, _W, _H)
     clock = pygame.time.Clock()
 
-    # Fontes mono para efeito terminal
-    font_title  = pygame.font.SysFont("couriernew",  96, bold=True)
-    font_instr  = pygame.font.SysFont("couriernew",  22)
-    font_option = pygame.font.SysFont("couriernew",  48, bold=True)
-    font_small  = pygame.font.SysFont("couriernew",  20)
-    font_hint   = pygame.font.SysFont("couriernew",  22)
+    font_title  = pygame.font.SysFont("couriernew", 88, bold=True)
+    font_option = pygame.font.SysFont("couriernew", 42, bold=True)
+    font_desc   = pygame.font.SysFont("couriernew", 20)
+    font_footer = pygame.font.SysFont("couriernew", 20)
+    font_label  = pygame.font.SysFont("couriernew", 18)
 
-    instructions = [
-        "WASD         : mover o cubo",
-        "SETAS + MOUSE: controlar a camera",
-        "G            : gerar novo mapa",
-        "Q / E        : subir / descer camera",
-        "",
-        "Colete blocos especiais para obter poderes.",
-        "Nao caia para nao perder vidas!",
-    ]
+    # Zonas de layout (frações da altura da tela)
+    TITLE_Y     = int(_H * 0.07)
+    SEP1_Y      = int(_H * 0.42)
+    OPTIONS_TOP = int(_H * 0.47)
+    OPT_SPACING = int(_H * 0.115)
+    SEP2_Y      = int(_H * 0.82)
+    FOOTER_Y    = int(_H * 0.86)
+
+    # Cubo 3D: posição fixa em coordenadas de espaço de visão (z=-8)
+    CUBE_CX = 2.2
+    CUBE_CY = 0.6
+    CUBE_SC = 1.1
 
     option_labels = [f"[ {d.label} ]" for d in _DIFFICULTIES]
+    block_h = font_option.get_height() + 4 + font_desc.get_height()
 
     angle = 0.0
     selected_idx = 0
     blink_t = 0.0
     cursor_visible = True
 
-    # Cubo fica no lado direito
-    cube_cx = _W * 0.78
-    cube_cy = _H * 0.52
-    cube_size = 220.0
-
     while True:
         dt = clock.tick(60) / 1000.0
-        angle += dt * 1.1
+        angle += dt
         blink_t += dt
         if blink_t >= 0.53:
             blink_t = 0.0
             cursor_visible = not cursor_visible
 
-        mx, my = pygame.mouse.get_pos()
-
-        # Calcula rects das opções para hit-test
-        option_y_start = _H // 2 + 20
         option_rects: list[pygame.Rect] = []
-        for i, label in enumerate(option_labels):
-            s = font_option.render(label, True, _GREEN)
-            rx = _W // 4 - s.get_width() // 2
-            ry = option_y_start + i * 80
-            option_rects.append(pygame.Rect(rx - 20, ry - 6, s.get_width() + 40, s.get_height() + 12))
-            if option_rects[-1].collidepoint(mx, my):
-                selected_idx = i
+        for i in range(len(_DIFFICULTIES)):
+            ry = OPTIONS_TOP + i * OPT_SPACING
+            option_rects.append(pygame.Rect(50, ry - 4, _W // 2, block_h + 8))
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -300,67 +416,69 @@ def run_menu() -> DifficultyConfig | None:
                 if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     pygame.quit()
                     return _DIFFICULTIES[selected_idx]
+            if event.type == pygame.MOUSEMOTION:
+                mx, my = event.pos
+                for i, r in enumerate(option_rects):
+                    if r.collidepoint(mx, my):
+                        selected_idx = i
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
                 for i, r in enumerate(option_rects):
                     if r.collidepoint(mx, my):
                         pygame.quit()
                         return _DIFFICULTIES[i]
 
-        # ── render ──────────────────────────────────────────────────────
-        screen.fill(_BG)
+        # ── render 3D ────────────────────────────────────────────────────
+        glClearColor(*_BG)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        _draw_3d_cube(angle, CUBE_CX, CUBE_CY, CUBE_SC)
 
-        # Cubo rotacionando
-        _draw_cube(screen, angle, cube_cx, cube_cy, cube_size)
+        # ── render 2D ────────────────────────────────────────────────────
+        _set_2d()
+        _gl_border()
 
-        # Borda decorativa
-        _draw_border(screen, font_small)
+        # Zona topo: título
+        _gl_text(font_title, "Cub Project!", 60, TITLE_Y, *_GREEN_HI[:3])
 
-        # Título
-        title_surf = font_title.render("Cub Project!", True, _GREEN_HI)
-        screen.blit(title_surf, (_W // 4 - title_surf.get_width() // 2, 60))
+        # Separador 1 (cyan neon)
+        _gl_line(40, SEP1_Y, _W - 40, SEP1_Y, *_CYAN[:3], 0.35, lw=1.0)
 
-        # Linha separadora abaixo do título
-        sep_y = 60 + title_surf.get_height() + 10
-        pygame.draw.line(screen, _GREEN_DIM, (40, sep_y), (_W // 2 - 40, sep_y), 1)
+        # Label de seleção
+        _gl_text(font_label, "> SELECIONE A DIFICULDADE:", 60, SEP1_Y + 8, *_GREEN_DIM[:3])
 
-        # Instruções
-        instr_y = sep_y + 24
-        screen.blit(font_small.render("> INSTRUCOES:", True, _GREEN_DIM), (60, instr_y))
-        instr_y += 28
-        for line in instructions:
-            s = font_instr.render(line, True, _GREEN_DIM)
-            screen.blit(s, (72, instr_y))
-            instr_y += 28
-
-        # Separador antes das opções
-        pygame.draw.line(screen, _GREEN_DIM, (40, instr_y + 10), (_W // 2 - 40, instr_y + 10), 1)
-
-        # Label de seleção de dificuldade
-        diff_label = font_small.render("> SELECIONE A DIFICULDADE:", True, _GREEN_DIM)
-        screen.blit(diff_label, (60, instr_y + 22))
-
-        # Opções de dificuldade
-        for i, label in enumerate(option_labels):
+        # Zona opções
+        for i, (label, desc) in enumerate(zip(option_labels, _DIFF_DESCRIPTIONS)):
             is_sel = (i == selected_idx)
-            color = _AMBER if is_sel else _GREEN
-            text = label
-            prefix = "> " if is_sel else "  "
-            cursor = ("_" if cursor_visible else " ") if is_sel else ""
-            line_text = f"{prefix}{text}{cursor}"
-            s = font_option.render(line_text, True, color)
-            rx = _W // 4 - s.get_width() // 2
-            ry = option_y_start + i * 80
+            ry = OPTIONS_TOP + i * OPT_SPACING
+
             if is_sel:
-                pygame.draw.rect(screen, (30, 25, 5), (rx - 24, ry - 8, s.get_width() + 48, s.get_height() + 16))
-                pygame.draw.rect(screen, _AMBER, (rx - 24, ry - 8, s.get_width() + 48, s.get_height() + 16), 1)
-            screen.blit(s, (rx, ry))
+                # Fundo do bloco selecionado
+                _gl_rect(50, ry - 6, _W // 2 - 60, block_h + 12, 0.10, 0.08, 0.01, 0.92)
+                _gl_rect_outline(50, ry - 6, _W // 2 - 60, block_h + 12, *_AMBER[:3], 0.9, lw=1.5)
+                _gl_rect_outline(47, ry - 9, _W // 2 - 54, block_h + 18, *_AMBER[:3], 0.20, lw=1.0)
 
-        # Hint inferior
-        hint_text = "ENTER/CLIQUE para confirmar  |  ESC para sair  |  W/S ou SETAS para navegar"
-        hint_s = font_hint.render(hint_text, True, _GREEN_DIM)
-        screen.blit(hint_s, ((_W - hint_s.get_width()) // 2, _H - 48))
+            # Indicador de seleção
+            prefix_text = "> " if is_sel else "  "
+            cr, cg, cb, _ = _AMBER if is_sel else _GREEN
+            cursor = ("_" if cursor_visible else " ") if is_sel else ""
+            name_text = f"{prefix_text}{label}{cursor}"
+            _gl_text(font_option, name_text, 60, ry, cr, cg, cb)
 
-        _draw_scanlines(screen)
+            # Descrição abaixo do nome
+            _gl_text(font_desc, f"   {desc}", 60, ry + font_option.get_height() + 4, 0.85, 0.85, 0.85)
+
+        # Separador 2
+        _gl_line(40, SEP2_Y, _W - 40, SEP2_Y, *_CYAN[:3], 0.35, lw=1.0)
+
+        # Rodapé: instruções compactas em 2 linhas
+        _gl_text(font_footer,
+                 "WASD: mover o cubo   |   SETAS + MOUSE: camera   |   G: novo mapa   |   Q/E: altura",
+                 60, FOOTER_Y, 0.85, 0.85, 0.85)
+        _gl_text(font_footer,
+                 "ENTER / CLIQUE para confirmar   |   W/S ou SETAS para navegar   |   ESC para sair",
+                 60, FOOTER_Y + font_footer.get_height() + 6, 0.85, 0.85, 0.85)
+
+        _gl_scanlines()
         pygame.display.flip()
 
     pygame.quit()
@@ -383,13 +501,15 @@ def run_end_screen(
     max_lives: int,
     label: str | None = None,
     next_label: str | None = None,
+    elapsed: str = "00:00:00",
 ) -> bool:
-    """Mostra a tela final. Retorna True quando SPACE pede o próximo nível."""
+    """Mostra a tela final em OpenGL. Retorna True quando SPACE pede o próximo nível."""
     pygame.init()
     pygame.font.init()
 
-    screen = pygame.display.set_mode((_W, _H), pygame.FULLSCREEN)
+    screen = pygame.display.set_mode((_W, _H), DOUBLEBUF | OPENGL | FULLSCREEN)
     pygame.display.set_caption("Cub Project! - Fim")
+    glViewport(0, 0, _W, _H)
     clock = pygame.time.Clock()
 
     font_title = pygame.font.SysFont("couriernew", 88, bold=True)
@@ -402,13 +522,13 @@ def run_end_screen(
     blink_t = 0.0
     cursor_visible = True
 
-    cube_cx = _W * 0.78
-    cube_cy = _H * 0.52
-    cube_size = 220.0
+    cube_3d_cx = 2.2
+    cube_3d_cy = 0.6
+    cube_scale  = 1.1
 
     while True:
         dt = clock.tick(60) / 1000.0
-        angle += dt * 1.1
+        angle += dt
         blink_t += dt
         if blink_t >= 0.53:
             blink_t = 0.0
@@ -423,45 +543,57 @@ def run_end_screen(
                 if event.key == pygame.K_SPACE and next_label is not None:
                     return True
 
-        screen.fill(_BG)
+        # ── render 3D ────────────────────────────────────────────────────
+        glClearColor(*_BG)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-        _draw_cube(screen, angle, cube_cx, cube_cy, cube_size)
-        _draw_border(screen, font_small)
+        _draw_3d_cube(angle, cube_3d_cx, cube_3d_cy, cube_scale)
 
-        title_surf = font_title.render("PARABENS!", True, _GREEN_HI)
-        screen.blit(title_surf, (_W // 4 - title_surf.get_width() // 2, 70))
+        # ── render 2D ────────────────────────────────────────────────────
+        _set_2d()
 
-        sep_y = 70 + title_surf.get_height() + 10
-        pygame.draw.line(screen, _GREEN_DIM, (40, sep_y), (_W // 2 - 40, sep_y), 1)
+        _gl_border()
+
+        title_text = "PARABENS!"
+        tw = font_title.size(title_text)[0]
+        _gl_text(font_title, title_text, _W // 4 - tw // 2, 70, *_GREEN_HI[:3])
+
+        sep_y = 70 + font_title.get_height() + 10
+        _gl_line(40, sep_y, _W // 2 - 40, sep_y, *_GREEN_DIM[:3], 0.7)
 
         msg = "VOCE CHEGOU AO FIM DO CAMINHO"
-        msg_surf = font_mid.render(msg, True, _GREEN)
-        screen.blit(msg_surf, (_W // 4 - msg_surf.get_width() // 2, sep_y + 30))
+        mw = font_mid.size(msg)[0]
+        _gl_text(font_mid, msg, _W // 4 - mw // 2, sep_y + 30, *_GREEN[:3])
 
         lives_text = f"VIDAS FINAIS: {lives}/{max_lives}"
-        lives_surf = font_text.render(lives_text, True, _GREEN_DIM)
-        screen.blit(lives_surf, (_W // 4 - lives_surf.get_width() // 2, sep_y + 90))
+        lw2 = font_text.size(lives_text)[0]
+        _gl_text(font_text, lives_text, _W // 4 - lw2 // 2, sep_y + 90, 0.85, 0.85, 0.85)
 
         if label is not None:
             diff_text = f"DIFICULDADE: {label}"
-            diff_surf = font_text.render(diff_text, True, _GREEN_DIM)
-            screen.blit(diff_surf, (_W // 4 - diff_surf.get_width() // 2, sep_y + 130))
+            dw = font_text.size(diff_text)[0]
+            _gl_text(font_text, diff_text, _W // 4 - dw // 2, sep_y + 130, 0.85, 0.85, 0.85)
+
+        time_label = f"TEMPO: {elapsed}"
+        tw2 = font_mid.size(time_label)[0]
+        _gl_text(font_mid, time_label, _W // 4 - tw2 // 2, sep_y + 185, *_CYAN[:3])
 
         if next_label is None:
             prompt = "> ENTER PARA SAIR" + ("_" if cursor_visible else " ")
         else:
             prompt = f"> ENTER PARA SAIR  |  SPACE PARA {next_label}" + ("_" if cursor_visible else " ")
-        prompt_surf = font_text.render(prompt, True, _AMBER)
-        screen.blit(prompt_surf, (_W // 4 - prompt_surf.get_width() // 2, _H - 120))
+        pw = font_text.size(prompt)[0]
+        _gl_text(font_text, prompt, _W // 4 - pw // 2, _H - 120, *_AMBER[:3])
 
         if next_label is None:
             hint_text = "ESC/ENTER para sair"
         else:
             hint_text = f"ESC/ENTER para sair  |  SPACE para nivel {next_label}"
-        hint_surf = font_hint.render(hint_text, True, _GREEN_DIM)
-        screen.blit(hint_surf, ((_W - hint_surf.get_width()) // 2, _H - 48))
+        hw = font_hint.size(hint_text)[0]
+        _gl_text(font_hint, hint_text, (_W - hw) // 2, _H - 48, *_GREEN_DIM[:3])
 
-        _draw_scanlines(screen)
+        _gl_scanlines()
+
         pygame.display.flip()
 
     return False
